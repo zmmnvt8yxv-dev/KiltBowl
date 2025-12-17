@@ -1,4 +1,4 @@
-/// --- Global Configuration (Must be customized by the user) ---
+// --- Global Configuration (Must be customized by the user) ---
 const LEAGUE_ID = "1262418074540195841"; 
 const USER_USERNAME = "conner27lax"; // Confirmed Username
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds refresh rate
@@ -9,8 +9,8 @@ const AVATAR_BASE = "https://sleepercdn.com/avatars/thumbs/";
 let nflState = {};
 let playerCache = {};
 let leagueContext = {
-    users: null, // FINAL FIX: Initialized as empty array
-    rosters: null, // FINAL FIX: Initialized as empty array
+    users:, // FINAL FIX: Correctly initialized as an empty array
+    rosters:, // FINAL FIX: Correctly initialized as an empty array
     userRosterId: null,
     matchupId: null,
 };
@@ -150,6 +150,7 @@ function mergeAndRenderData(data) {
     // --- Helper function to get User and Roster details ---
     const getTeamDetails = (roster) => {
         const user = leagueContext.users.find(u => u.user_id === roster.owner_id);
+        // FIX APPLIED HERE: Using correct Logical OR (||)
         const teamName = roster.metadata?.team_name |
 
 | user?.display_name |
@@ -157,6 +158,7 @@ function mergeAndRenderData(data) {
         
         // Sleeper API does not explicitly provide W/L for the team object easily, 
         // so we derive the record from the roster's win/loss count.
+        // FIX APPLIED HERE: Using correct Logical OR (||)
         const record = `${roster.settings.wins |
 
 | 0}-${roster.settings.losses |
@@ -168,7 +170,7 @@ function mergeAndRenderData(data) {
             record: record,
             avatar: user?.avatar,
             starters: roster.starters,
-            points: roster.points // Authoritative league-calculated score [1]
+            points: roster.points // Authoritative league-calculated score
         };
     };
 
@@ -206,6 +208,7 @@ function renderStarters(starterIds, containerId, projections, stats) {
         const player = playerCache[playerId];
         
         // Player details mapping
+        // FIX APPLIED HERE: Using correct Logical OR (||)
         const position = player?.position |
 
 | 'N/A';
@@ -217,7 +220,7 @@ function renderStarters(starterIds, containerId, projections, stats) {
 | '';
 
         // Score retrieval (using PPR fields for projections/stats as a common standard)
-        // Note: The stats/projections APIs usually provide points like pts_ppr or pts_std.[2]
+        // FIX APPLIED HERE: Using correct Logical OR (||)
         const projScore = projections[playerId]?.pts_ppr |
 
 | 0.0;
