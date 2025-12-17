@@ -235,8 +235,8 @@ if (actualScore > 0.01 && projScore !== 0) {
         const projScore = projections?.[playerId]?.pts_ppr || 0.0;
         const actualScore = stats?.[playerId]?.pts_ppr || 0.0;
         
-        let statusText = team ? `${team}` : 'N/A';
-        
+        let team = player?.team || ''; // Extract team from player data
+let statusText = team ? `${team}` : 'N/A';
         if (actualScore > 0.01 && projScore !== 0) {
             statusText += ` - LIVE`;
         } else if (projScore === 0) {
