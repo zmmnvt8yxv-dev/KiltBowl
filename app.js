@@ -102,8 +102,12 @@ async function fetchDynamicData(week, season) {
     }
 
     const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
-    const projectionsUrl = `${API_BASE}/projections/nfl/${season}/${week}`;
-    const statsUrl = `${API_BASE}/stats/nfl/${season}/${week}`;
+   const projections = (await fetchJson(projectionsUrl).catch(() => null)) || {};
+const stats = (await fetchJson(statsUrl).catch(() => null)) || {};
+
+if (!projections || !stats) {
+    console.warn("Projections or stats are unavailable. Ensure the API is functioning.");
+}
 
     const [matchups, projections, stats] = await Promise.all([
         fetchJson(matchupUrl),
@@ -113,8 +117,8 @@ async function fetchDynamicData(week, season) {
     
     // Validate matchups data
     if (!Array.isArray(matchups) || matchups.length === 0) {
-        throw new Error(`No matchup data available for Week ${week}`);
-    }
+    console.warn(`No matchup data available for Week ${week}`);
+}
 
     const userTeamMatchup = matchups.find(m => m && m.roster_id === leagueContext.userRosterId);
     if (!userTeamMatchup) {
@@ -201,6 +205,15 @@ function mergeAndRenderData(data) {
 /**
  * Renders the list of starting players for one team.
  */
+let statusText = team ? `${team}` : 'N/A';
+
+if (actualScore > 0.01 && projScore !== 0) {
+    statusText += ` - LIVE`;
+} else if (projScore === 0) {
+    statusText += ` - BYE/Post-Game`; 
+} else {
+    statusText += ` - YET TO PLAY`;
+}
 function renderStarters(starterIds, containerId, projections, stats) {
     const container = document.getElementById(containerId);
     if (!container) {
