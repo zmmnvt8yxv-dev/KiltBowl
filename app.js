@@ -96,30 +96,40 @@ async function fetchInitialContext() {
  * STEP 4: Retrieve matchup, stats, and projections.
  */
 async function fetchDynamicData(week, season) {
+    // Validate inputs
+    if (!week || !season) {
+        throw new Error(`Invalid week (${week}) or season (${season})`);
+    }
+
     const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
     const projectionsUrl = `${API_BASE}/projections/nfl/${season}/${week}`;
     const statsUrl = `${API_BASE}/stats/nfl/${season}/${week}`;
 
     const [matchups, projections, stats] = await Promise.all([
         fetchJson(matchupUrl),
-        fetchJson(projectionsUrl),
-        fetchJson(statsUrl)
+        fetchJson(projectionsUrl).catch(() => ({})), // Default to empty object if projections fail
+        fetchJson(statsUrl).catch(() => ({}))  // Default to empty object if stats fail
     ]);
     
-    const userTeamMatchup = matchups.find(m => m.roster_id === leagueContext.userRosterId);
+    // Validate matchups data
+    if (!Array.isArray(matchups) || matchups.length === 0) {
+        throw new Error(`No matchup data available for Week ${week}`);
+    }
+
+    const userTeamMatchup = matchups.find(m => m && m.roster_id === leagueContext.userRosterId);
     if (!userTeamMatchup) {
         throw new Error(`Matchup data for Roster ID ${leagueContext.userRosterId} not found in Week ${week}.`);
     }
 
     leagueContext.matchupId = userTeamMatchup.matchup_id;
     
-    const currentMatchupTeams = matchups.filter(m => m.matchup_id === leagueContext.matchupId)
+    const currentMatchupTeams = matchups.filter(m => m && m.matchup_id === leagueContext.matchupId)
                                     .sort((a, b) => a.roster_id - b.roster_id);
 
     return { 
         matchupTeams: currentMatchupTeams, 
-        projections: projections, 
-        stats: stats 
+        projections: projections || {}, 
+        stats: stats || {}
     };
 }
 
@@ -127,41 +137,55 @@ async function fetchDynamicData(week, season) {
  * STEP 5: Merge all data sets and render to the DOM.
  */
 function mergeAndRenderData(data) {
+    if (!data || !data.matchupTeams) {
+        console.error("Invalid data structure received:", data);
+        return;
+    }
+
     const { matchupTeams, projections, stats } = data;
     
-    const teamA = matchupTeams.find(t => t.roster_id === leagueContext.userRosterId);
-    const teamB = matchupTeams.find(t => t.roster_id !== leagueContext.userRosterId);
+    const teamA = matchupTeams.find(t => t && t.roster_id === leagueContext.userRosterId);
+    const teamB = matchupTeams.find(t => t && t.roster_id !== leagueContext.userRosterId);
 
     if (!teamA || !teamB) {
         throw new Error("Could not identify both teams in the matchup.");
     }
 
     const getTeamDetails = (roster) => {
-        const user = leagueContext.users.find(u => u.user_id === roster.owner_id);
+        if (!roster) return null;
+        
+        const user = leagueContext.users.find(u => u && u.user_id === roster.owner_id);
         const teamName = roster.metadata?.team_name || user?.display_name || `Roster ${roster.roster_id}`;
-        const record = `${roster.settings.wins || 0}-${roster.settings.losses || 0}${roster.settings.ties ? '-' + roster.settings.ties : ''}`;
+        const wins = roster.settings?.wins || 0;
+        const losses = roster.settings?.losses || 0;
+        const ties = roster.settings?.ties || 0;
+        const record = `${wins}-${losses}${ties > 0 ? '-' + ties : ''}`;
 
         return {
             id: roster.roster_id,
             name: teamName,
             record: record,
-            avatar: user?.avatar,
-            starters: roster.starters,
-            points: roster.points
+            avatar: user?.avatar || '',
+            starters: roster.starters || [],
+            points: roster.points || 0
         };
     };
 
     const teamADetails = getTeamDetails(teamA);
     const teamBDetails = getTeamDetails(teamB);
 
+    if (!teamADetails || !teamBDetails) {
+        throw new Error("Failed to get team details");
+    }
+
     document.getElementById('team-a-name').textContent = teamADetails.name;
     document.getElementById('team-a-record').textContent = teamADetails.record;
-    document.getElementById('team-a-avatar').src = `${AVATAR_BASE}${teamADetails.avatar}`;
+    document.getElementById('team-a-avatar').src = teamADetails.avatar ? `${AVATAR_BASE}${teamADetails.avatar}` : '';
     document.getElementById('score-a').textContent = teamADetails.points.toFixed(2);
 
     document.getElementById('team-b-name').textContent = teamBDetails.name;
     document.getElementById('team-b-record').textContent = teamBDetails.record;
-    document.getElementById('team-b-avatar').src = `${AVATAR_BASE}${teamBDetails.avatar}`;
+    document.getElementById('team-b-avatar').src = teamBDetails.avatar ? `${AVATAR_BASE}${teamBDetails.avatar}` : '';
     document.getElementById('score-b').textContent = teamBDetails.points.toFixed(2);
     
     renderStarters(teamADetails.starters, 'team-a-starters', projections, stats);
@@ -179,7 +203,17 @@ function mergeAndRenderData(data) {
  */
 function renderStarters(starterIds, containerId, projections, stats) {
     const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`Container ${containerId} not found`);
+        return;
+    }
+    
     container.innerHTML = '';
+
+    if (!Array.isArray(starterIds)) {
+        console.error("starterIds is not an array:", starterIds);
+        return;
+    }
 
     starterIds.forEach(playerId => {
         const player = playerCache[playerId];
@@ -188,10 +222,10 @@ function renderStarters(starterIds, containerId, projections, stats) {
         const name = player?.full_name || 'Unknown Player';
         const team = player?.team || '';
 
-        const projScore = projections[playerId]?.pts_ppr || 0.0;
-        const actualScore = stats[playerId]?.pts_ppr || 0.0;
+        const projScore = projections?.[playerId]?.pts_ppr || 0.0;
+        const actualScore = stats?.[playerId]?.pts_ppr || 0.0;
         
-        let statusText = `${team}`;
+        let statusText = team ? `${team}` : 'N/A';
         
         if (actualScore > 0.01 && projScore !== 0) {
             statusText += ` - LIVE`;
@@ -240,6 +274,12 @@ async function initializeApp() {
  */
 async function fetchAndRenderData(week, season) {
     try {
+        // Validate that we have necessary context
+        if (!leagueContext.users || !leagueContext.rosters || !leagueContext.userRosterId) {
+            console.error("League context not initialized properly");
+            return;
+        }
+
         const dynamicData = await fetchDynamicData(week, season);
         mergeAndRenderData(dynamicData);
     } catch (error) {
@@ -255,19 +295,24 @@ function startLiveUpdate() {
     const countdownElement = document.getElementById('countdown');
 
     const updateCountdown = () => {
-        countdownElement.textContent = countdownValue;
+        if (countdownElement) {
+            countdownElement.textContent = countdownValue;
+        }
+        
         if (countdownValue <= 0) {
             countdownValue = UPDATE_INTERVAL_MS / 1000;
-            fetchAndRenderData(nflState.week, nflState.season);
+            // Re-fetch NFL state in case week changed
+            getNFLState().then(() => {
+                fetchAndRenderData(nflState.week, nflState.season);
+            }).catch(err => {
+                console.error("Error updating NFL state:", err);
+            });
         } else {
             countdownValue--;
         }
     };
 
     setInterval(updateCountdown, 1000);
-    updateTimer = setInterval(() => {
-        // Handled by countdown loop
-    }, UPDATE_INTERVAL_MS);
 }
 
 // Kick off the application when page loads
