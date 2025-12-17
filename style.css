@@ -15,6 +15,12 @@ body {
     max-width: 1400px;
     margin: 0 auto;
 }
+.error-placeholder {
+    text-align: center;
+    color: red;
+    font-size: 18px;
+    margin: 20px auto;
+}
 
 #loading {
     text-align: center;
@@ -102,7 +108,14 @@ body {
     align-items: center;
     transition: transform 0.2s;
 }
-
+@media (max-width: 480px) {
+    .score-display {
+        font-size: 30px;
+    }
+    .team-info h2 {
+        font-size: 16px;
+    }
+}
 .player-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
