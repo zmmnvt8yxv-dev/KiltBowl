@@ -9,8 +9,8 @@ const AVATAR_BASE = "https://sleepercdn.com/avatars/thumbs/";
 let nflState = {};
 let playerCache = {};
 let leagueContext = {
-    users:,
-    rosters:,
+    users:, // CORRECTED: Initialized as empty array
+    rosters:, // CORRECTED: Initialized as empty array
     userRosterId: null,
     matchupId: null,
 };
