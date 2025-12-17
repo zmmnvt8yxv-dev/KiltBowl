@@ -1,4 +1,4 @@
-// --- Global Configuration (Must be customized by the user) ---
+/// --- Global Configuration (Must be customized by the user) ---
 const LEAGUE_ID = "1262418074540195841"; 
 const USER_USERNAME = "conner27lax"; // Confirmed Username
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds refresh rate
