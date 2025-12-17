@@ -1,6 +1,6 @@
 // --- Global Configuration (Must be customized by the user) ---
 const LEAGUE_ID = "1262418074540195841"; 
-const USER_USERNAME = "conner27lax"; // <-- USER MUST EDIT THIS
+const USER_USERNAME = "conner27lax"; // Confirmed Username
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds refresh rate
 
 // --- Global Data Stores (Client-side Cache) ---
@@ -9,8 +9,8 @@ const AVATAR_BASE = "https://sleepercdn.com/avatars/thumbs/";
 let nflState = {};
 let playerCache = {};
 let leagueContext = {
-    users:, // CORRECTED: Initialized as empty array
-    rosters:, // CORRECTED: Initialized as empty array
+    users:, // FINAL FIX: Initialized as empty array
+    rosters:, // FINAL FIX: Initialized as empty array
     userRosterId: null,
     matchupId: null,
 };
@@ -92,6 +92,7 @@ async function fetchInitialContext() {
         console.log(`Identified current user's Roster ID: ${leagueContext.userRosterId}`);
 
     } catch (error) {
+        document.getElementById('loading').textContent = `Error: Failed to identify user or fetch league structure. Check if '${USER_USERNAME}' is correct in the code.`;
         console.error("Error fetching initial league context:", error);
         throw new Error("Failed to identify user or fetch league structure.");
     }
@@ -123,7 +124,7 @@ async function fetchDynamicData(week, season) {
     
     // Filter the full matchup list down to the two teams in this specific matchup ID
     const currentMatchupTeams = matchups.filter(m => m.matchup_id === leagueContext.matchupId)
-                                      .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
+                                     .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
 
     return { 
         matchupTeams: currentMatchupTeams, 
