@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sleeper Matchup Viewer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+        <div id="loading">Loading Sleeper Data... Please wait for initial setup.</div>
+        
+        <div id="scoreboard" class="hidden">
+            <div id="scoreboard-header">
+                <div class="team-header left-team">
+                    <img id="team-a-avatar" class="avatar" src="" alt="Team A Avatar">
+                    <div class="team-info">
+                        <span id="team-a-name" class="team-name"></span>
+                        <span id="team-a-record" class="team-record"></span>
+                    </div>
+                </div>
+                
+                <div class="score-display">
+                    <span id="score-a" class="total-score actual-score">0.00</span>
+                    <span class="vs-text">VS</span>
+                    <span id="score-b" class="total-score actual-score">0.00</span>
+                </div>
+
+                <div class="team-header right-team">
+                    <div class="team-info">
+                        <span id="team-b-name" class="team-name"></span>
+                        <span id="team-b-record" class="team-record"></span>
+                    </div>
+                    <img id="team-b-avatar" class="avatar" src="" alt="Team B Avatar">
+                </div>
+            </div>
+
+            <div id="matchup-container">
+                <div id="team-a-starters" class="player-list team-a-list"></div>
+                <div id="team-b-starters" class="player-list team-b-list"></div>
+            </div>
+            
+            <div id="status-bar">
+                <p>Data last updated: <span id="last-updated">N/A</span>. Next update in <span id="countdown">30</span> seconds.</p>
+            </div>
+        </div>
+        
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
