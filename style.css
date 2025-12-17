@@ -1,0 +1,176 @@
+:root {
+    --bg-color-dark: #1e1e2c;
+    --card-color: #2a2a38;
+    --text-color-light: #f0f0f0;
+    --text-color-secondary: #999;
+    --score-projected: #4f5b66;
+    --score-actual: #4CAF50; /* Green for actual score */
+    --score-projected-bg: #1c1c24;
+}
+
+body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    background-color: var(--bg-color-dark);
+    color: var(--text-color-light);
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+}
+
+#app-container {
+    width: 100%;
+    max-width: 1000px;
+}
+
+#loading {
+    text-align: center;
+    padding: 50px;
+    font-size: 1.2em;
+}
+
+.hidden {
+    display: none;
+}
+
+/* --- Header Styling --- */
+#scoreboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: var(--card-color);
+    padding: 15px 25px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.team-header {
+    display: flex;
+    align-items: center;
+    flex-basis: 30%; /* Allocate space for team info */
+}
+
+.left-team { justify-content: flex-start; }
+.right-team { justify-content: flex-end; text-align: right;}
+.right-team.team-info { order: -1; margin-right: 15px; }
+
+.avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 3px solid var(--score-actual);
+    object-fit: cover;
+    margin: 0 15px;
+}
+
+.team-name {
+    display: block;
+    font-size: 1.4em;
+    font-weight: bold;
+}
+.team-record {
+    display: block;
+    font-size: 0.8em;
+    color: var(--text-color-secondary);
+}
+
+.score-display {
+    display: flex;
+    align-items: baseline;
+    font-size: 2.5em;
+    font-weight: 800;
+    flex-basis: 40%;
+    justify-content: space-around;
+}
+.vs-text {
+    font-size: 0.5em;
+    font-weight: normal;
+    color: var(--text-color-secondary);
+}
+
+/* --- Matchup Grid Styling --- */
+#matchup-container {
+    display: flex;
+    gap: 20px;
+}
+
+.player-list {
+    flex: 1;
+    min-width: 0; 
+}
+
+.player-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--card-color);
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    transition: background-color 0.2s;
+}
+
+.player-card:hover {
+    background-color: #353545;
+}
+
+.player-info {
+    flex-grow: 1;
+}
+
+.player-name {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.player-details {
+    font-size: 0.8em;
+    color: var(--text-color-secondary);
+    margin-top: 2px;
+}
+
+.score-box {
+    text-align: right;
+    width: 100px;
+}
+
+.score-actual {
+    font-weight: 700;
+    color: var(--text-color-light);
+    font-size: 1.2em;
+}
+
+.score-projected {
+    color: var(--score-projected);
+    font-size: 0.9em;
+    padding-top: 2px;
+}
+
+/* --- Responsive Adjustments --- */
+@media (max-width: 768px) {
+    #scoreboard-header {
+        flex-direction: column;
+        padding: 15px;
+    }
+   .team-header {
+        flex-basis: auto;
+        width: 100%;
+        margin: 5px 0;
+    }
+   .right-team {
+        flex-direction: row-reverse;
+        text-align: left;
+    }
+   .right-team.team-info { margin-right: 0; margin-left: 15px; }
+
+   .score-display {
+        order: -1; 
+        font-size: 2em;
+        margin-bottom: 10px;
+    }
+    
+    #matchup-container {
+        flex-direction: column; /* Stacks the teams vertically */
+    }
+}
