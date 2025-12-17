@@ -101,19 +101,17 @@ async function fetchDynamicData(week, season) {
         throw new Error(`Invalid week (${week}) or season (${season})`);
     }
 
-    const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
-   const projections = (await fetchJson(projectionsUrl).catch(() => null)) || {};
-const stats = (await fetchJson(statsUrl).catch(() => null)) || {};
+    let projections = {};
+let stats = {};
 
-if (!projections || !stats) {
-    console.warn("Projections or stats are unavailable. Ensure the API is functioning.");
-}
+const [matchups, fetchedProjections, fetchedStats] = await Promise.all([
+    fetchJson(matchupUrl),
+    fetchJson(projectionsUrl).catch(() => ({})), // Default to empty object if projections fail
+    fetchJson(statsUrl).catch(() => ({}))        // Default to empty object if stats fail
+]);
 
-    const [matchups, projections, stats] = await Promise.all([
-        fetchJson(matchupUrl),
-        fetchJson(projectionsUrl).catch(() => ({})), // Default to empty object if projections fail
-        fetchJson(statsUrl).catch(() => ({}))  // Default to empty object if stats fail
-    ]);
+projections = fetchedProjections || {}; 
+stats = fetchedStats || {};
     
     // Validate matchups data
     if (!Array.isArray(matchups) || matchups.length === 0) {
