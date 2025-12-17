@@ -203,21 +203,20 @@ function mergeAndRenderData(data) {
 /**
  * Renders the list of starting players for one team.
  */
-let statusText = team ? `${team}` : 'N/A';
+let statusText = '';
+if (player && player.team) {
+    statusText = `${player.team} - `;
+} else {
+    statusText = 'N/A - ';
+}
 
 if (actualScore > 0.01 && projScore !== 0) {
-    statusText += ` - LIVE`;
+    statusText += `LIVE`;
 } else if (projScore === 0) {
-    statusText += ` - BYE/Post-Game`; 
+    statusText += `BYE/Post-Game`; 
 } else {
-    statusText += ` - YET TO PLAY`;
+    statusText += `YET TO PLAY`;
 }
-function renderStarters(starterIds, containerId, projections, stats) {
-    const container = document.getElementById(containerId);
-    if (!container) {
-        console.error(`Container ${containerId} not found`);
-        return;
-    }
     
     container.innerHTML = '';
 
