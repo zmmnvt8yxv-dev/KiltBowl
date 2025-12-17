@@ -3,49 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sleeper Matchup Viewer</title>
+    <title>KiltBowl - Sleeper Fantasy Scoreboard</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="app-container">
-        <div id="loading">Loading Sleeper Data... Please wait for initial setup.</div>
+    <div class="container">
+        <div id="loading">Loading scoreboard data...</div>
         
         <div id="scoreboard" class="hidden">
-            <div id="scoreboard-header">
-                <div class="team-header left-team">
-                    <img id="team-a-avatar" class="avatar" src="" alt="Team A Avatar">
+            <div class="header">
+                <div class="team-header">
+                    <img id="team-a-avatar" class="team-avatar" src="" alt="Team A">
                     <div class="team-info">
-                        <span id="team-a-name" class="team-name"></span>
-                        <span id="team-a-record" class="team-record"></span>
+                        <h2 id="team-a-name">Team A</h2>
+                        <div class="team-record" id="team-a-record">0-0</div>
                     </div>
                 </div>
                 
-                <div class="score-display">
-                    <span id="score-a" class="total-score actual-score">0.00</span>
-                    <span class="vs-text">VS</span>
-                    <span id="score-b" class="total-score actual-score">0.00</span>
+                <div style="text-align: center;">
+                    <div class="score-display" id="score-a">0.00</div>
                 </div>
-
-                <div class="team-header right-team">
-                    <div class="team-info">
-                        <span id="team-b-name" class="team-name"></span>
-                        <span id="team-b-record" class="team-record"></span>
+                
+                <div class="vs">VS</div>
+                
+                <div style="text-align: center;">
+                    <div class="score-display" id="score-b">0.00</div>
+                </div>
+                
+                <div class="team-header">
+                    <div class="team-info" style="text-align: right;">
+                        <h2 id="team-b-name">Team B</h2>
+                        <div class="team-record" id="team-b-record">0-0</div>
                     </div>
-                    <img id="team-b-avatar" class="avatar" src="" alt="Team B Avatar">
+                    <img id="team-b-avatar" class="team-avatar" src="" alt="Team B">
                 </div>
             </div>
 
-            <div id="matchup-container">
-                <div id="team-a-starters" class="player-list team-a-list"></div>
-                <div id="team-b-starters" class="player-list team-b-list"></div>
+            <div class="matchup-container">
+                <div class="team-column">
+                    <h3>Your Starters</h3>
+                    <div id="team-a-starters"></div>
+                </div>
+                
+                <div class="team-column">
+                    <h3>Opponent Starters</h3>
+                    <div id="team-b-starters"></div>
+                </div>
             </div>
-            
-            <div id="status-bar">
-                <p>Data last updated: <span id="last-updated">N/A</span>. Next update in <span id="countdown">30</span> seconds.</p>
+
+            <div class="footer">
+                <div class="update-info">
+                    <span>Last Updated: <strong id="last-updated">--:--:--</strong></span>
+                    <span>Next Update: <strong id="countdown">30</strong>s</span>
+                </div>
             </div>
         </div>
-        
     </div>
+
     <script src="app.js"></script>
 </body>
 </html>
