@@ -124,7 +124,7 @@ async function fetchDynamicData(week, season) {
     
     // Filter the full matchup list down to the two teams in this specific matchup ID
     const currentMatchupTeams = matchups.filter(m => m.matchup_id === leagueContext.matchupId)
-                                     .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
+                                    .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
 
     return { 
         matchupTeams: currentMatchupTeams, 
