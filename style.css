@@ -153,18 +153,18 @@ body {
         flex-direction: column;
         padding: 15px;
     }
-   .team-header {
+  .team-header {
         flex-basis: auto;
         width: 100%;
         margin: 5px 0;
     }
-   .right-team {
+  .right-team {
         flex-direction: row-reverse;
         text-align: left;
     }
-   .right-team.team-info { margin-right: 0; margin-left: 15px; }
+  .right-team.team-info { margin-right: 0; margin-left: 15px; }
 
-   .score-display {
+  .score-display {
         order: -1; 
         font-size: 2em;
         margin-bottom: 10px;

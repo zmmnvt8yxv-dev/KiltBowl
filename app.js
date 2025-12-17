@@ -123,7 +123,7 @@ async function fetchDynamicData(week, season) {
     
     // Filter the full matchup list down to the two teams in this specific matchup ID
     const currentMatchupTeams = matchups.filter(m => m.matchup_id === leagueContext.matchupId)
-                                       .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
+                                      .sort((a, b) => a.roster_id - b.roster_id); // Ensure consistent order
 
     return { 
         matchupTeams: currentMatchupTeams, 
@@ -167,7 +167,7 @@ function mergeAndRenderData(data) {
             record: record,
             avatar: user?.avatar,
             starters: roster.starters,
-            points: roster.points // Authoritative league-calculated score 
+            points: roster.points // Authoritative league-calculated score [1]
         };
     };
 
@@ -216,8 +216,7 @@ function renderStarters(starterIds, containerId, projections, stats) {
 | '';
 
         // Score retrieval (using PPR fields for projections/stats as a common standard)
-        // Note: The stats/projections APIs usually provide points like pts_ppr or pts_std.
-        // We use these general points for display next to the player, even if the league uses complex custom scoring.
+        // Note: The stats/projections APIs usually provide points like pts_ppr or pts_std.[2]
         const projScore = projections[playerId]?.pts_ppr |
 
 | 0.0;
@@ -226,8 +225,6 @@ function renderStarters(starterIds, containerId, projections, stats) {
 | 0.0;
         
         // Status detail (mimicking Sleeper's in-game status bar)
-        // Status information is often deeply nested in player metadata or other live game endpoints not detailed here.
-        // For simplicity, we show a basic status based on accumulated points.
         let statusText = `${team}`; // Start with the player's NFL team
         
         if (actualScore > 0.01 && projScore!== 0) {
