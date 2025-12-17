@@ -1,6 +1,6 @@
 // --- Global Configuration (Must be customized by the user) ---
 const LEAGUE_ID = "1262418074540195841"; 
-const USER_USERNAME = "YOUR_SLEEPER_USERNAME"; // <-- USER MUST EDIT THIS
+const USER_USERNAME = "conner27lax"; // <-- USER MUST EDIT THIS
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds refresh rate
 
 // --- Global Data Stores (Client-side Cache) ---
