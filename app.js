@@ -617,6 +617,7 @@ function renderMatchupSelector() {
 
 async function fetchDynamicData(week, season) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
+
   const projectionsUrl =
     `https://api.sleeper.app/projections/nfl/${season}/${week}` +
     `?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF&position[]=FLEX`;
@@ -630,49 +631,51 @@ async function fetchDynamicData(week, season) {
   window.__latestProjections = projections;
 
   if (!Array.isArray(matchups) || matchups.length === 0) {
-    matchupIndexById = {};
-    return { matchupTeams: [], projections };
+    return { matchupTeams: [], projections, allMatchups: [] };
   }
 
-  // Group by matchup_id
-  const groups = {};
+  // Group all matchups by matchup_id
+  const groups = new Map(); // matchup_id -> []
   for (const m of matchups) {
     if (!m || m.matchup_id === null || m.matchup_id === undefined) continue;
-    const mid = Number(m.matchup_id);
-    if (!Number.isFinite(mid) || mid <= 0) continue;
-    if (!groups[mid]) groups[mid] = [];
-    groups[mid].push(m);
+    const id = String(m.matchup_id);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(m);
   }
 
-  // Identify my matchup (default)
-  const my = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-  if (!my) throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
+  // Try to read selected matchup id from dropdown (if present)
+  const sel = document.getElementById("matchup-select");
+  const selectedId = sel && sel.value ? String(sel.value) : "";
 
-  leagueContext.matchupId = Number(my.matchup_id);
+  let chosenId = "";
 
-  // Build selector index
-  matchupIndexById = {};
-  for (const [midStr, arr] of Object.entries(groups)) {
-    const arrSorted = arr.slice().sort((a, b) => a.roster_id - b.roster_id);
-    const rosterIds = arrSorted.map((x) => x.roster_id);
-    if (rosterIds.length >= 2) {
-      matchupIndexById[Number(midStr)] = {
-        matchupId: Number(midStr),
-        rosterIds: [rosterIds[0], rosterIds[1]],
-        label: buildMatchupLabel(rosterIds[0], rosterIds[1]),
-      };
+  // 1) user-selected matchup id
+  if (selectedId && groups.has(selectedId)) {
+    chosenId = selectedId;
+  } else {
+    // 2) matchup containing the user's roster
+    const userRow = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
+    if (userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null) {
+      const id = String(userRow.matchup_id);
+      if (groups.has(id)) chosenId = id;
+    }
+
+    // 3) fallback to first group
+    if (!chosenId) {
+      const firstKey = groups.keys().next().value;
+      if (firstKey) chosenId = String(firstKey);
     }
   }
 
-  const useMatchupId = Number.isFinite(Number(selectedMatchupId))
-    ? Number(selectedMatchupId)
-    : Number(leagueContext.matchupId);
+  const currentMatchupTeams = chosenId && groups.has(chosenId) ? groups.get(chosenId) : [];
 
-  const currentMatchupTeams = (groups[useMatchupId] || groups[leagueContext.matchupId] || [])
-    .slice()
-    .sort((a, b) => a.roster_id - b.roster_id);
+  // Keep for rendering + dropdown sync
+  leagueContext.matchupId = chosenId ? Number(chosenId) : null;
 
-  return { matchupTeams: currentMatchupTeams, projections };
+  // Sort stable
+  currentMatchupTeams.sort((a, b) => (a.roster_id || 0) - (b.roster_id || 0));
+
+  return { matchupTeams: currentMatchupTeams, projections, allMatchups: matchups };
 }
 
 // ------------------------------
