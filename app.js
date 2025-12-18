@@ -614,7 +614,71 @@ function renderMatchupSelector() {
   selectedMatchupId = desired;
   ensureMatchupSelectorWiredOnce();
 }
+function getTeamNameByRosterId(rosterId) {
+  const roster = leagueContext.rosters?.find((r) => r && r.roster_id === rosterId) || null;
+  const user = roster ? leagueContext.users?.find((u) => u && u.user_id === roster.owner_id) : null;
+  return roster?.metadata?.team_name || user?.display_name || `Roster ${rosterId}`;
+}
 
+function buildMatchupGroups(matchups) {
+  const groups = new Map(); // matchup_id -> [{...},{...}]
+  if (!Array.isArray(matchups)) return groups;
+  for (const m of matchups) {
+    if (!m || m.matchup_id === null || m.matchup_id === undefined) continue;
+    const id = String(m.matchup_id);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(m);
+  }
+  // Only keep groups that look like actual head-to-head (>=2)
+  for (const [k, arr] of groups.entries()) {
+    if (!Array.isArray(arr) || arr.length < 2) groups.delete(k);
+    else arr.sort((a, b) => (a.roster_id || 0) - (b.roster_id || 0));
+  }
+  return groups;
+}
+
+function renderMatchupSelect(matchups, selectedId) {
+  const wrap = document.getElementById("matchup-select-wrap");
+  const sel = document.getElementById("matchup-select");
+  if (!wrap || !sel) return;
+
+  const groups = buildMatchupGroups(matchups);
+  const ids = Array.from(groups.keys()).sort((a, b) => Number(a) - Number(b));
+
+  if (ids.length <= 1) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+
+  sel.innerHTML = ids
+    .map((id) => {
+      const arr = groups.get(id);
+      const a = getTeamNameByRosterId(arr[0]?.roster_id);
+      const b = getTeamNameByRosterId(arr[1]?.roster_id);
+      return `<option value="${escapeHtml(id)}">${escapeHtml(a)} vs ${escapeHtml(b)}</option>`;
+    })
+    .join("");
+
+  const chosen = selectedId && groups.has(String(selectedId)) ? String(selectedId) : ids[0];
+  sel.value = chosen;
+}
+
+function wireMatchupSelectOnce() {
+  const sel = document.getElementById("matchup-select");
+  if (!sel || sel.__wired) return;
+  sel.__wired = true;
+
+  sel.addEventListener("change", async () => {
+    leagueContext.matchupId = sel.value ? Number(sel.value) : null;
+    try {
+      await fetchAndRenderData();
+    } catch (e) {
+      console.error("Matchup change rerender failed:", e);
+    }
+  });
+}
 async function fetchDynamicData(week, season) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
 
@@ -634,47 +698,45 @@ async function fetchDynamicData(week, season) {
     return { matchupTeams: [], projections, allMatchups: [] };
   }
 
-  // Group all matchups by matchup_id
-  const groups = new Map(); // matchup_id -> []
-  for (const m of matchups) {
-    if (!m || m.matchup_id === null || m.matchup_id === undefined) continue;
-    const id = String(m.matchup_id);
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(m);
-  }
-
-  // Try to read selected matchup id from dropdown (if present)
+  const groups = buildMatchupGroups(matchups);
   const sel = document.getElementById("matchup-select");
-  const selectedId = sel && sel.value ? String(sel.value) : "";
+  const selectedIdFromUI = sel && sel.value ? String(sel.value) : "";
 
   let chosenId = "";
 
-  // 1) user-selected matchup id
-  if (selectedId && groups.has(selectedId)) {
-    chosenId = selectedId;
+  // 1) UI selection
+  if (selectedIdFromUI && groups.has(selectedIdFromUI)) {
+    chosenId = selectedIdFromUI;
   } else {
-    // 2) matchup containing the user's roster
-    const userRow = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-    if (userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null) {
-      const id = String(userRow.matchup_id);
-      if (groups.has(id)) chosenId = id;
+    // 2) Previously chosen
+    if (leagueContext.matchupId !== null && leagueContext.matchupId !== undefined) {
+      const prev = String(leagueContext.matchupId);
+      if (groups.has(prev)) chosenId = prev;
     }
 
-    // 3) fallback to first group
+    // 3) User roster matchup
+    if (!chosenId && leagueContext.userRosterId) {
+      const userRow = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
+      if (userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null) {
+        const id = String(userRow.matchup_id);
+        if (groups.has(id)) chosenId = id;
+      }
+    }
+
+    // 4) First matchup
     if (!chosenId) {
       const firstKey = groups.keys().next().value;
       if (firstKey) chosenId = String(firstKey);
     }
   }
 
-  const currentMatchupTeams = chosenId && groups.has(chosenId) ? groups.get(chosenId) : [];
-
-  // Keep for rendering + dropdown sync
   leagueContext.matchupId = chosenId ? Number(chosenId) : null;
 
-  // Sort stable
-  currentMatchupTeams.sort((a, b) => (a.roster_id || 0) - (b.roster_id || 0));
+  // IMPORTANT: keep the dropdown in sync and wired
+  renderMatchupSelect(matchups, chosenId);
+  wireMatchupSelectOnce();
 
+  const currentMatchupTeams = chosenId && groups.has(chosenId) ? groups.get(chosenId) : [];
   return { matchupTeams: currentMatchupTeams, projections, allMatchups: matchups };
 }
 
