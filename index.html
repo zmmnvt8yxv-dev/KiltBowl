@@ -9,7 +9,6 @@
 
 <body>
   <div class="container">
-    <!-- Top banner -->
     <header class="topbar">
       <div class="topbar-left">
         <div class="title-row">
@@ -29,10 +28,8 @@
       </div>
     </header>
 
-    <!-- Loading / errors -->
     <div id="loading" class="loading">Loading matchup…</div>
 
-    <!-- Main scoreboard -->
     <section id="scoreboard" class="scoreboard hidden">
       <div class="scoreboard-header">
         <div class="team-header">
@@ -73,9 +70,7 @@
       </div>
 
       <footer class="footer">
-        <div class="footer-muted">
-          Tap a player to open details.
-        </div>
+        <div class="footer-muted">Tap a player to open details.</div>
       </footer>
     </section>
   </div>
@@ -92,11 +87,11 @@
       </div>
 
       <div id="player-modal-actions" class="modal-actions"></div>
-
       <div id="player-modal-body" class="modal-body"></div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <!-- defer ensures DOM exists before app runs -->
+  <script src="app.js" defer></script>
 </body>
 </html>
