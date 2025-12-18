@@ -12,6 +12,8 @@ const AVATAR_BASE = "https://sleepercdn.com/avatars/thumbs/";
 
 let nflState = {};
 let playerCache = {};
+let LEAGUE_SEASON = null; // critical: use the league season for stats/schedule/matchups
+
 let leagueContext = {
   users: null,
   rosters: null,
@@ -30,57 +32,27 @@ let statsCacheByWeek = {};
 let modalIsOpen = false;
 let modalLastFocusedEl = null;
 
-// Manual “news” overrides you can edit anytime (multiplier + note)
+// Manual “news” overrides keyed by SLEEPER player_id (the ids in starters)
 const NEWS_OVERRIDES = {
-  // Use Sleeper player_id keys (the ids used in starters).
-  // "1234": { mult: 1.30, note: "Expected to start (+30%)" },
-  // "5678": { mult: 1.10, note: "Expected increased role (+10%)" },
+  // "4046": { mult: 1.30, note: "Expected to start (+30%)" },
+  // "1234": { mult: 1.10, note: "Expected increased role (+10%)" },
 };
-
-function getNewsMultiplierAndNote(player) {
-  const pid = String(player?.player_id ?? player?.id ?? "");
-  const override = NEWS_OVERRIDES[pid];
-  if (override && Number.isFinite(Number(override.mult))) {
-    return { mult: Number(override.mult), note: String(override.note || "Manual adjustment") };
-  }
-
-  // Automatic rules from Sleeper player fields (best-effort)
-  const injury = String(player?.injury_status || "").toLowerCase();
-  const practice = String(player?.practice_participation || "").toLowerCase();
-  const status = String(player?.status || "").toLowerCase();
-
-  if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
-  if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
-  if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
-
-  if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
-  if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
-
-  return { mult: 1.0, note: "" };
-}
 
 // ------------------------------
 // Utilities
 // ------------------------------
 async function fetchJson(url) {
   const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} for ${url}`);
-  }
+  if (!response.ok) throw new Error(`API request failed: ${response.status} for ${url}`);
   return response.json();
 }
 
-// Try multiple candidate URLs and return first successful non-empty result
 async function tryFetchFirst(urls = []) {
   for (const url of urls) {
     try {
       const data = await fetchJson(url);
-      if (data && (Array.isArray(data) ? data.length > 0 : Object.keys(data).length > 0)) {
-        return data;
-      }
-    } catch (_) {
-      // ignore and try next
-    }
+      if (data && (Array.isArray(data) ? data.length > 0 : Object.keys(data).length > 0)) return data;
+    } catch (_) {}
   }
   return null;
 }
@@ -104,15 +76,20 @@ function setImgSrc(id, src) {
   if (el && el.tagName === "IMG") el.src = src;
 }
 
+function safeText(v) {
+  return v === undefined || v === null ? "" : String(v);
+}
+
+function pickSeason() {
+  return Number(LEAGUE_SEASON) || Number(nflState?.season) || new Date().getFullYear();
+}
+
 function getLastNWeeksCompleted(currentWeek, n) {
   const weeks = [];
-  for (let w = Math.max(1, currentWeek - n); w <= Math.max(1, currentWeek - 1); w += 1) {
-    weeks.push(w);
-  }
+  for (let w = Math.max(1, currentWeek - n); w <= Math.max(1, currentWeek - 1); w += 1) weeks.push(w);
   return weeks;
 }
 
-// Weighted average: more recent weeks count more
 function weightedAvg(values) {
   let num = 0;
   let den = 0;
@@ -121,14 +98,15 @@ function weightedAvg(values) {
     num += v * w;
     den += w;
   }
-  return den > 0 ? num / den : 0;
+  return den > 0 ? num / den : null;
 }
 
-// Pull stat safely
+// stat getter that preserves missing vs real 0
 function s(obj, key) {
-  const v = obj?.[key];
+  if (!obj) return null;
+  const v = obj[key];
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
 }
 
 function formatStatValue(v) {
@@ -138,11 +116,30 @@ function formatStatValue(v) {
   return String(v);
 }
 
+function getNewsMultiplierAndNote(playerId, playerObj) {
+  const pid = String(playerId);
+  const override = NEWS_OVERRIDES[pid];
+  if (override && Number.isFinite(Number(override.mult))) {
+    return { mult: Number(override.mult), note: String(override.note || "Manual adjustment") };
+  }
+
+  // Automatic heuristics from Sleeper player fields (best-effort)
+  const injury = String(playerObj?.injury_status || "").toLowerCase();
+  const practice = String(playerObj?.practice_participation || "").toLowerCase();
+  const status = String(playerObj?.status || "").toLowerCase();
+
+  if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
+  if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
+  if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
+
+  if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
+  if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
+
+  return { mult: 1.0, note: "" };
+}
+
 // ------------------------------
-// Player modal helpers
-// Requires HTML elements with ids:
-// player-modal-backdrop, player-modal-title, player-modal-subtitle,
-// player-modal-actions, player-modal-body, player-modal-close
+// Modal helpers (requires index.html ids)
 // ------------------------------
 function getEl(id) {
   return document.getElementById(id);
@@ -169,9 +166,7 @@ function closePlayerModal() {
   backdrop.setAttribute("aria-hidden", "true");
   modalIsOpen = false;
 
-  if (modalLastFocusedEl && typeof modalLastFocusedEl.focus === "function") {
-    modalLastFocusedEl.focus();
-  }
+  if (modalLastFocusedEl && typeof modalLastFocusedEl.focus === "function") modalLastFocusedEl.focus();
 }
 
 function wirePlayerModalEventsOnce() {
@@ -194,10 +189,6 @@ function wirePlayerModalEventsOnce() {
   });
 }
 
-function safeText(v) {
-  return v === undefined || v === null ? "" : String(v);
-}
-
 function buildEspnPlayerUrl(playerObj) {
   const espnId = playerObj?.espn_id ?? playerObj?.espnId;
   if (!espnId) return "";
@@ -214,180 +205,6 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
   if (subEl) subEl.textContent = subtitle;
   if (actionsEl) actionsEl.innerHTML = actionsHtml;
   if (bodyEl) bodyEl.innerHTML = bodyHtml;
-}
-
-async function fetchStatsForWeekCached(season, week) {
-  const w = Number(week);
-  if (statsCacheByWeek[w]) return statsCacheByWeek[w];
-
-  const url = `${API_BASE}/stats/nfl/${season}/${w}`;
-  const data = await tryFetchFirst([url]);
-  statsCacheByWeek[w] = data || null;
-  return statsCacheByWeek[w];
-}
-
-function getPlayerStatsFromWeekPayload(weekPayload, playerId) {
-  if (!weekPayload) return null;
-  const pid = String(playerId);
-
-  if (typeof weekPayload === "object" && !Array.isArray(weekPayload)) {
-    if (weekPayload[pid]) return weekPayload[pid];
-    if (weekPayload[String(Number(pid))]) return weekPayload[String(Number(pid))];
-
-    const nested = weekPayload.data || weekPayload.stats || null;
-    if (nested) return getPlayerStatsFromWeekPayload(nested, pid);
-  }
-
-  if (Array.isArray(weekPayload)) {
-    const row = weekPayload.find((r) => String(r?.player_id ?? r?.playerId ?? r?.id) === pid);
-    if (!row) return null;
-    return row?.stats ? row.stats : row;
-  }
-
-  return null;
-}
-
-async function showPlayerDetailsModal(playerId) {
-  wirePlayerModalEventsOnce();
-
-  const player = playerCache[String(playerId)] || playerCache[Number(playerId)] || null;
-  if (!player) return;
-
-  const position = String(player?.position || "").toUpperCase();
-  const team = safeText(player?.team || "");
-  const name = safeText(
-    player?.full_name || (player?.first_name ? `${player.first_name} ${player.last_name}` : "Player")
-  );
-
-  const espnUrl = buildEspnPlayerUrl(player);
-  const actions = espnUrl
-    ? `<a href="${espnUrl}" target="_blank" rel="noopener noreferrer">Open ESPN player page</a>`
-    : `<span class="player-muted">ESPN link unavailable (no espn_id)</span>`;
-
-  renderPlayerModalContent({
-    title: name,
-    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
-    actionsHtml: actions,
-    bodyHtml: `<div class="player-loading">Loading…</div>`,
-  });
-
-  openPlayerModal();
-
-  const season = Number(nflState?.season) || new Date().getFullYear();
-  const currentWeek = Number(DISPLAY_WEEK);
-
-  const weeksToFetch = getLastNWeeksCompleted(currentWeek, 6);
-
-  const weekPayloads = [];
-  for (const w of weeksToFetch) {
-    let payload = null;
-    try {
-      payload = await fetchStatsForWeekCached(season, w);
-    } catch (_) {
-      payload = null;
-    }
-    weekPayloads.push({ week: w, payload });
-  }
-
-  const rows = [];
-  for (const { week, payload } of weekPayloads) {
-    const statsObj = getPlayerStatsFromWeekPayload(payload, playerId);
-
-    const pts = s(statsObj, "pts_ppr") || s(statsObj, "fantasy_points") || s(statsObj, "points");
-
-    rows.push({
-      week,
-      pts,
-      rush_att: s(statsObj, "rush_att"),
-      rush_yd: s(statsObj, "rush_yd"),
-      rush_td: s(statsObj, "rush_td"),
-      rec: s(statsObj, "rec"),
-      rec_tgt: s(statsObj, "rec_tgt"),
-      rec_yd: s(statsObj, "rec_yd"),
-      rec_td: s(statsObj, "rec_td"),
-      pass_yd: s(statsObj, "pass_yd"),
-      pass_td: s(statsObj, "pass_td"),
-      pass_int: s(statsObj, "pass_int"),
-    });
-  }
-
-  // recency weights: oldest=1 ... newest=6
-  const weighted = (k) =>
-    weightedAvg(rows.map((r, i) => ({ v: Number(r[k] || 0), w: i + 1 })));
-
-  const expectedRaw = {
-    pts: weighted("pts"),
-    rush_att: weighted("rush_att"),
-    rush_yd: weighted("rush_yd"),
-    rush_td: weighted("rush_td"),
-    rec: weighted("rec"),
-    rec_tgt: weighted("rec_tgt"),
-    rec_yd: weighted("rec_yd"),
-    rec_td: weighted("rec_td"),
-    pass_yd: weighted("pass_yd"),
-    pass_td: weighted("pass_td"),
-    pass_int: weighted("pass_int"),
-  };
-
-  const { mult, note } = getNewsMultiplierAndNote(player);
-  const expectedAdj = {};
-  for (const [k, v] of Object.entries(expectedRaw)) expectedAdj[k] = Number(v) * mult;
-
-  const statTable = `
-    <table class="player-table" aria-label="Recent stats + expected">
-      <thead>
-        <tr>
-          <th>Week</th>
-          <th>PPR</th>
-          <th>Rush</th>
-          <th>Rec/Tgt</th>
-          <th>Pass</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows
-          .map(
-            (r) => `
-          <tr>
-            <td>${r.week}</td>
-            <td>${formatStatValue(r.pts)}</td>
-            <td>${formatStatValue(r.rush_att)}-${formatStatValue(r.rush_yd)} (${formatStatValue(r.rush_td)} TD)</td>
-            <td>${formatStatValue(r.rec)}/${formatStatValue(r.rec_tgt)}-${formatStatValue(r.rec_yd)} (${formatStatValue(r.rec_td)} TD)</td>
-            <td>${formatStatValue(r.pass_yd)} (${formatStatValue(r.pass_td)} TD, ${formatStatValue(r.pass_int)} INT)</td>
-          </tr>
-        `
-          )
-          .join("")}
-
-        <tr>
-          <td><strong>Expected</strong></td>
-          <td><strong>${formatStatValue(expectedRaw.pts)}</strong></td>
-          <td><strong>${formatStatValue(expectedRaw.rush_att)}-${formatStatValue(expectedRaw.rush_yd)} (${formatStatValue(expectedRaw.rush_td)} TD)</strong></td>
-          <td><strong>${formatStatValue(expectedRaw.rec)}/${formatStatValue(expectedRaw.rec_tgt)}-${formatStatValue(expectedRaw.rec_yd)} (${formatStatValue(expectedRaw.rec_td)} TD)</strong></td>
-          <td><strong>${formatStatValue(expectedRaw.pass_yd)} (${formatStatValue(expectedRaw.pass_td)} TD, ${formatStatValue(expectedRaw.pass_int)} INT)</strong></td>
-        </tr>
-
-        <tr>
-          <td><strong>Expected*</strong></td>
-          <td><strong>${formatStatValue(expectedAdj.pts)}</strong></td>
-          <td><strong>${formatStatValue(expectedAdj.rush_att)}-${formatStatValue(expectedAdj.rush_yd)} (${formatStatValue(expectedAdj.rush_td)} TD)</strong></td>
-          <td><strong>${formatStatValue(expectedAdj.rec)}/${formatStatValue(expectedAdj.rec_tgt)}-${formatStatValue(expectedAdj.rec_yd)} (${formatStatValue(expectedAdj.rec_td)} TD)</strong></td>
-          <td><strong>${formatStatValue(expectedAdj.pass_yd)} (${formatStatValue(expectedAdj.pass_td)} TD, ${formatStatValue(expectedAdj.pass_int)} INT)</strong></td>
-        </tr>
-      </tbody>
-    </table>
-  `;
-
-  const expectedNote = note
-    ? `<div class="player-muted" style="margin-top:8px;">* Adjusted: ${escapeHtml(note)}</div>`
-    : "";
-
-  renderPlayerModalContent({
-    title: name,
-    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
-    actionsHtml: actions,
-    bodyHtml: `${statTable}${expectedNote}`,
-  });
 }
 
 // ------------------------------
@@ -410,28 +227,33 @@ async function getAllPlayers() {
 }
 
 // ------------------------------
-// Step 3: League context (users/rosters + user roster id)
+// Step 3: League context (users/rosters + user roster id + league season)
 // ------------------------------
 async function fetchInitialContext() {
   const userUrl = `${API_BASE}/user/${USER_USERNAME}`;
   const userData = await fetchJson(userUrl);
   const userId = userData.user_id;
 
+  const leagueUrl = `${API_BASE}/league/${LEAGUE_ID}`;
   const usersUrl = `${API_BASE}/league/${LEAGUE_ID}/users`;
   const rostersUrl = `${API_BASE}/league/${LEAGUE_ID}/rosters`;
 
-  const [users, rosters] = await Promise.all([fetchJson(usersUrl), fetchJson(rostersUrl)]);
+  const [leagueMeta, users, rosters] = await Promise.all([
+    fetchJson(leagueUrl),
+    fetchJson(usersUrl),
+    fetchJson(rostersUrl),
+  ]);
+
+  LEAGUE_SEASON = Number(leagueMeta?.season) || null;
 
   leagueContext.users = users;
   leagueContext.rosters = rosters;
 
   const userRoster = rosters.find((r) => r && r.owner_id === userId);
-  if (!userRoster) {
-    throw new Error(`Roster not found for user ${USER_USERNAME} in league ${LEAGUE_ID}.`);
-  }
+  if (!userRoster) throw new Error(`Roster not found for user ${USER_USERNAME} in league ${LEAGUE_ID}.`);
 
   leagueContext.userRosterId = userRoster.roster_id;
-  console.log(`User roster_id=${leagueContext.userRosterId}`);
+  console.log(`User roster_id=${leagueContext.userRosterId} league_season=${LEAGUE_SEASON}`);
 }
 
 // ------------------------------
@@ -449,7 +271,6 @@ function buildScheduleMapForWeek(schedule, week) {
   weekGames.forEach((g) => {
     const home = g?.home ?? g?.home_team ?? g?.homeTeam;
     const away = g?.away ?? g?.away_team ?? g?.awayTeam;
-
     if (!home || !away) return;
 
     const status = String(g?.status ?? g?.game_status ?? g?.state ?? "");
@@ -466,54 +287,22 @@ async function fetchScheduleForSeasonAndWeek(season, week) {
   const regularUrl = `https://api.sleeper.app/schedule/nfl/regular/${season}`;
   const schedule = await tryFetchFirst([regularUrl]);
   scheduleByTeam = buildScheduleMapForWeek(schedule, week);
-
   console.log(`Schedule map built for week ${week}. Teams mapped: ${Object.keys(scheduleByTeam).length}`);
 }
 
 // ------------------------------
-// Step 5: Matchups + Projections (still fetched for the main page only if you want it later)
+// Step 5: Matchups
 // ------------------------------
-function normalizeProjectionsToMap(projData) {
-  const map = {};
-  if (Array.isArray(projData)) {
-    for (const p of projData) {
-      const pid = p?.player_id ?? p?.playerId ?? p?.id;
-      if (pid !== undefined && pid !== null) {
-        map[String(pid)] = p;
-      }
-    }
-    return map;
-  }
-  if (projData && typeof projData === "object") {
-    for (const [k, v] of Object.entries(projData)) {
-      map[String(k)] = v;
-    }
-  }
-  return map;
-}
-
 async function fetchDynamicData(week, season) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
-
-  // still fetched to keep compatibility; modal no longer uses it for “expected”
-  const projectionsUrl = `https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF&position[]=FLEX`;
-
-  const [matchups, projectionsRaw] = await Promise.all([
-    fetchJson(matchupUrl),
-    tryFetchFirst([projectionsUrl]).catch(() => null),
-  ]);
-
-  const projections = normalizeProjectionsToMap(projectionsRaw || {});
-  window.__latestProjections = projections;
+  const matchups = await fetchJson(matchupUrl);
 
   if (!Array.isArray(matchups) || matchups.length === 0) {
-    return { matchupTeams: [], projections };
+    return { matchupTeams: [] };
   }
 
   const userTeamMatchup = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-  if (!userTeamMatchup) {
-    throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
-  }
+  if (!userTeamMatchup) throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
 
   leagueContext.matchupId = userTeamMatchup.matchup_id;
 
@@ -521,7 +310,43 @@ async function fetchDynamicData(week, season) {
     .filter((m) => m && m.matchup_id === leagueContext.matchupId)
     .sort((a, b) => a.roster_id - b.roster_id);
 
-  return { matchupTeams: currentMatchupTeams, projections };
+  return { matchupTeams: currentMatchupTeams };
+}
+
+// ------------------------------
+// Step 5.5: Stats cache helpers (for modal)
+// ------------------------------
+async function fetchStatsForWeekCached(season, week) {
+  const w = Number(week);
+  if (Object.prototype.hasOwnProperty.call(statsCacheByWeek, w)) return statsCacheByWeek[w];
+
+  const url = `${API_BASE}/stats/nfl/${season}/${w}`;
+  const data = await tryFetchFirst([url]);
+  statsCacheByWeek[w] = data || null;
+  return statsCacheByWeek[w];
+}
+
+function getPlayerStatsFromWeekPayload(weekPayload, playerId) {
+  if (!weekPayload) return null;
+  const pid = String(playerId);
+
+  // Common: object keyed by player_id
+  if (typeof weekPayload === "object" && !Array.isArray(weekPayload)) {
+    if (weekPayload[pid]) return weekPayload[pid];
+    if (weekPayload[String(Number(pid))]) return weekPayload[String(Number(pid))];
+
+    const nested = weekPayload.data || weekPayload.stats || null;
+    if (nested) return getPlayerStatsFromWeekPayload(nested, pid);
+  }
+
+  // Sometimes: array of rows
+  if (Array.isArray(weekPayload)) {
+    const row = weekPayload.find((r) => String(r?.player_id ?? r?.playerId ?? r?.id) === pid);
+    if (!row) return null;
+    return row?.stats ? row.stats : row;
+  }
+
+  return null;
 }
 
 // ------------------------------
@@ -533,23 +358,18 @@ function mergeAndRenderData(data) {
     return;
   }
 
-  const { matchupTeams, projections } = data;
+  const matchupTeams = data.matchupTeams;
 
   const teamA = matchupTeams.find((t) => t && t.roster_id === leagueContext.userRosterId);
   const teamB = matchupTeams.find((t) => t && t.roster_id !== leagueContext.userRosterId);
 
-  if (!teamA || !teamB) {
-    throw new Error("Could not identify both teams in the matchup.");
-  }
+  if (!teamA || !teamB) throw new Error("Could not identify both teams in the matchup.");
 
   const getTeamDetails = (matchupTeam) => {
-    if (!matchupTeam) return null;
-
     const roster = leagueContext.rosters?.find((r) => r && r.roster_id === matchupTeam.roster_id) || null;
     const user = roster ? leagueContext.users?.find((u) => u && u.user_id === roster.owner_id) : null;
 
     const teamName = roster?.metadata?.team_name || user?.display_name || `Roster ${matchupTeam.roster_id}`;
-
     const wins = roster?.settings?.wins || 0;
     const losses = roster?.settings?.losses || 0;
     const ties = roster?.settings?.ties || 0;
@@ -569,10 +389,6 @@ function mergeAndRenderData(data) {
   const teamADetails = getTeamDetails(teamA);
   const teamBDetails = getTeamDetails(teamB);
 
-  if (!teamADetails || !teamBDetails) {
-    throw new Error("Failed to get team details");
-  }
-
   setText("team-a-name", teamADetails.name);
   setText("team-a-record", teamADetails.record);
   setImgSrc("team-a-avatar", teamADetails.avatar ? `${AVATAR_BASE}${teamADetails.avatar}` : "");
@@ -583,8 +399,8 @@ function mergeAndRenderData(data) {
   setImgSrc("team-b-avatar", teamBDetails.avatar ? `${AVATAR_BASE}${teamBDetails.avatar}` : "");
   setText("score-b", teamBDetails.points.toFixed(2));
 
-  renderStarters(teamADetails.starters, "team-a-starters", teamADetails.playersPoints, projections);
-  renderStarters(teamBDetails.starters, "team-b-starters", teamBDetails.playersPoints, projections);
+  renderStarters(teamADetails.starters, "team-a-starters", teamADetails.playersPoints);
+  renderStarters(teamBDetails.starters, "team-b-starters", teamBDetails.playersPoints);
 
   const scoreboardEl = document.getElementById("scoreboard");
   if (scoreboardEl) scoreboardEl.classList.remove("hidden");
@@ -606,11 +422,10 @@ function getOpponentTextForTeam(teamAbbrev) {
   const ha = entry.homeAway || "vs";
   const opp = entry.opp || "";
   const status = entry.gameStatus ? ` • ${entry.gameStatus}` : "";
-
   return `${ha} ${opp}${status}`.trim();
 }
 
-function renderStarters(starterIds = [], containerId, playersPoints = {}, projections = {}) {
+function renderStarters(starterIds = [], containerId, playersPoints = {}) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
@@ -620,7 +435,7 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
   starterIds.forEach((playerIdRaw) => {
     const playerId = String(playerIdRaw);
 
-    // Team DEF often appears as "HOU", "DAL", etc.
+    // Team DEF token like "HOU"
     const isTeamDef = /^[A-Z]{2,4}$/.test(playerId) && !playerCache[playerId];
 
     const player = playerCache[playerId] || playerCache[Number(playerId)] || null;
@@ -632,7 +447,6 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
 
     const teamShort = isTeamDef ? playerId : (player?.team || "");
     const actualScore = Number(playersPoints?.[playerId] ?? 0);
-
     const oppText = teamShort ? getOpponentTextForTeam(teamShort) : "N/A";
 
     const card = document.createElement("div");
@@ -643,7 +457,6 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
       card.setAttribute("tabindex", "0");
 
       const open = () => showPlayerDetailsModal(playerId).catch((e) => console.error("Player modal error:", e));
-
       card.addEventListener("click", open);
       card.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -668,13 +481,174 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
 }
 
 // ------------------------------
+// Player modal (6-week table + expected + adjusted expected)
+// ------------------------------
+async function showPlayerDetailsModal(playerId) {
+  wirePlayerModalEventsOnce();
+
+  const player = playerCache[String(playerId)] || playerCache[Number(playerId)] || null;
+  if (!player) return;
+
+  const position = String(player?.position || "").toUpperCase();
+  const team = safeText(player?.team || "");
+  const name = safeText(player?.full_name || (player?.first_name ? `${player.first_name} ${player.last_name}` : "Player"));
+
+  const espnUrl = buildEspnPlayerUrl(player);
+  const actions = espnUrl
+    ? `<a href="${espnUrl}" target="_blank" rel="noopener noreferrer">Open ESPN player page</a>`
+    : `<span class="player-muted">ESPN link unavailable (no espn_id)</span>`;
+
+  renderPlayerModalContent({
+    title: name,
+    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
+    actionsHtml: actions,
+    bodyHtml: `<div class="player-loading">Loading…</div>`,
+  });
+
+  openPlayerModal();
+
+  const season = pickSeason();
+  const currentWeek = Number(DISPLAY_WEEK);
+  const weeksToFetch = getLastNWeeksCompleted(currentWeek, 6);
+
+  const rows = [];
+  for (const w of weeksToFetch) {
+    let payload = null;
+    try {
+      payload = await fetchStatsForWeekCached(season, w);
+    } catch (_) {
+      payload = null;
+    }
+    const statsObj = getPlayerStatsFromWeekPayload(payload, playerId);
+
+    const pts =
+      s(statsObj, "pts_ppr") ??
+      s(statsObj, "fantasy_points") ??
+      s(statsObj, "points");
+
+    rows.push({
+      week: w,
+      pts,
+      rush_att: s(statsObj, "rush_att"),
+      rush_yd: s(statsObj, "rush_yd"),
+      rush_td: s(statsObj, "rush_td"),
+      rec: s(statsObj, "rec"),
+      rec_tgt: s(statsObj, "rec_tgt"),
+      rec_yd: s(statsObj, "rec_yd"),
+      rec_td: s(statsObj, "rec_td"),
+      pass_yd: s(statsObj, "pass_yd"),
+      pass_td: s(statsObj, "pass_td"),
+      pass_int: s(statsObj, "pass_int"),
+    });
+  }
+
+  const weighted = (k) => {
+    const vals = rows
+      .map((r, i) => ({ v: Number(r[k]), w: i + 1 }))
+      .filter((x) => Number.isFinite(x.v));
+    return weightedAvg(vals);
+  };
+
+  const expectedRaw = {
+    pts: weighted("pts"),
+    rush_att: weighted("rush_att"),
+    rush_yd: weighted("rush_yd"),
+    rush_td: weighted("rush_td"),
+    rec: weighted("rec"),
+    rec_tgt: weighted("rec_tgt"),
+    rec_yd: weighted("rec_yd"),
+    rec_td: weighted("rec_td"),
+    pass_yd: weighted("pass_yd"),
+    pass_td: weighted("pass_td"),
+    pass_int: weighted("pass_int"),
+  };
+
+  const { mult, note } = getNewsMultiplierAndNote(playerId, player);
+  const expectedAdj = {};
+  for (const [k, v] of Object.entries(expectedRaw)) {
+    expectedAdj[k] = v === null || v === undefined ? null : Number(v) * mult;
+  }
+
+  const cellRush = (r) => {
+    if (r.rush_att == null && r.rush_yd == null && r.rush_td == null) return "—";
+    return `${formatStatValue(r.rush_att)}-${formatStatValue(r.rush_yd)} (${formatStatValue(r.rush_td)} TD)`;
+  };
+  const cellRec = (r) => {
+    if (r.rec == null && r.rec_tgt == null && r.rec_yd == null && r.rec_td == null) return "—";
+    return `${formatStatValue(r.rec)}/${formatStatValue(r.rec_tgt)}-${formatStatValue(r.rec_yd)} (${formatStatValue(r.rec_td)} TD)`;
+  };
+  const cellPass = (r) => {
+    if (r.pass_yd == null && r.pass_td == null && r.pass_int == null) return "—";
+    return `${formatStatValue(r.pass_yd)} (${formatStatValue(r.pass_td)} TD, ${formatStatValue(r.pass_int)} INT)`;
+  };
+
+  const statTable = `
+    <table class="player-table" aria-label="Recent stats + expected">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>PPR</th>
+          <th>Rush</th>
+          <th>Rec/Tgt</th>
+          <th>Pass</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map(
+            (r) => `
+          <tr>
+            <td>${r.week}</td>
+            <td>${formatStatValue(r.pts)}</td>
+            <td>${cellRush(r)}</td>
+            <td>${cellRec(r)}</td>
+            <td>${cellPass(r)}</td>
+          </tr>
+        `
+          )
+          .join("")}
+
+        <tr>
+          <td><strong>Expected</strong></td>
+          <td><strong>${formatStatValue(expectedRaw.pts)}</strong></td>
+          <td><strong>${cellRush(expectedRaw)}</strong></td>
+          <td><strong>${cellRec(expectedRaw)}</strong></td>
+          <td><strong>${cellPass(expectedRaw)}</strong></td>
+        </tr>
+
+        <tr>
+          <td><strong>Expected*</strong></td>
+          <td><strong>${formatStatValue(expectedAdj.pts)}</strong></td>
+          <td><strong>${cellRush(expectedAdj)}</strong></td>
+          <td><strong>${cellRec(expectedAdj)}</strong></td>
+          <td><strong>${cellPass(expectedAdj)}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+
+  const expectedNote = note
+    ? `<div class="player-muted" style="margin-top:8px;">* Adjusted: ${escapeHtml(note)}</div>`
+    : "";
+
+  const seasonNote = `<div class="player-muted" style="margin-top:8px;">Season used for stats: ${escapeHtml(String(season))}. Weeks shown: ${escapeHtml(String(weeksToFetch[0] || ""))}–${escapeHtml(String(weeksToFetch[weeksToFetch.length - 1] || ""))}.</div>`;
+
+  renderPlayerModalContent({
+    title: name,
+    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
+    actionsHtml: actions,
+    bodyHtml: `${statTable}${expectedNote}${seasonNote}`,
+  });
+}
+
+// ------------------------------
 // Main application flow
 // ------------------------------
 async function fetchAndRenderData() {
   if (!leagueContext.users || !leagueContext.rosters || !leagueContext.userRosterId) return;
 
   const week = DISPLAY_WEEK;
-  const season = Number(nflState?.season) || new Date().getFullYear();
+  const season = pickSeason();
 
   await fetchScheduleForSeasonAndWeek(season, week);
 
@@ -718,13 +692,10 @@ async function initializeApp() {
     await fetchInitialContext();
 
     await fetchAndRenderData();
-
     startLiveUpdate();
   } catch (error) {
     const loadingEl = document.getElementById("loading");
-    if (loadingEl) {
-      loadingEl.textContent = `Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`;
-    }
+    if (loadingEl) loadingEl.textContent = `Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`;
     console.error("Initialization Failed:", error);
   }
 }
