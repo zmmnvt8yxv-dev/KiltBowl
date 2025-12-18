@@ -1,4 +1,4 @@
-name: Build Static Player Stats JSON (nflreadr/nflreadpy)
+name: Build Raw Weekly Player Stats JSON (nflreadpy)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-stats:
+  build-raw-stats:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,9 +23,8 @@ jobs:
         run: |
           set -euxo pipefail
           curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
-          echo "SLEEPER_SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
-          echo "SLEEPER_WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
-          echo "Sleeper state:"
+          echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
+          echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
           cat nfl_state.json
 
       - name: Set up Python
@@ -33,13 +32,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps (nflreadpy)
+      - name: Install deps
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
           python -m pip install nflreadpy polars pyarrow pandas
 
-      - name: Build data/stats-static.json using nflreadpy loaders
+      - name: Build data/player-stats-raw.json (NO sleeper mapping)
         run: |
           set -euxo pipefail
           mkdir -p data
@@ -47,253 +46,105 @@ jobs:
           python - <<'PY'
           import os, json, datetime
           import pandas as pd
-
-          import nflreadpy as nfl  # python port of nflreadr
           import polars as pl
+          import nflreadpy as nfl
 
-          SLEEPER_SEASON = int(os.environ["SLEEPER_SEASON"])
-          SLEEPER_WEEK = int(os.environ["SLEEPER_WEEK"])
-          SLEEPER_LAST_COMPLETED = max(0, SLEEPER_WEEK - 1)
+          SEASON = int(os.environ["SEASON"])
+          WEEK = int(os.environ["WEEK"])
+          LAST_COMPLETED = max(0, WEEK - 1)
 
           def nowz():
             return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-          def pl_to_pd(df):
+          def to_pd(df):
             if isinstance(df, pl.DataFrame):
               return df.to_pandas()
             return pd.DataFrame(df)
 
-          def pick_col(df, *cands):
-            for c in cands:
-              if c in df.columns:
-                return c
-            return None
+          print(f"Loading nflreadpy player stats for season={SEASON} …")
+          stats = nfl.load_player_stats([SEASON])
+          df = to_pd(stats)
 
-          def to_int(x):
-            try:
-              if pd.isna(x): return 0
-              return int(float(x))
-            except Exception:
-              return 0
+          print("Rows loaded:", len(df))
+          print("Columns:", list(df.columns)[:80])
 
-          def to_float(x):
-            try:
-              if pd.isna(x): return 0.0
-              return float(x)
-            except Exception:
-              return 0.0
-
-          # -------- Load player stats (try Sleeper season, then fallback) --------
-          tried = []
-          stats_pd = None
-          selected_season = None
-
-          for season_try in [SLEEPER_SEASON, SLEEPER_SEASON - 1]:
-            if season_try <= 0: 
-              continue
-            tried.append(season_try)
-            try:
-              stats = nfl.load_player_stats([season_try])  # week-level by default
-              stats_pd = pl_to_pd(stats)
-              if stats_pd is not None and len(stats_pd) > 0:
-                selected_season = season_try
-                break
-            except Exception as e:
-              print(f"load_player_stats({season_try}) failed:", e)
-
-          if stats_pd is None or len(stats_pd) == 0:
-            out = {
-              "season": SLEEPER_SEASON,
-              "generated_at": nowz(),
-              "last_completed_week": SLEEPER_LAST_COMPLETED,
-              "source": "nflreadpy.load_player_stats (empty)",
-              "weeks": {},
-              "build_meta": {"tried_seasons": tried}
-            }
-            with open("data/stats-static.json", "w", encoding="utf-8") as f:
-              json.dump(out, f, indent=2)
-            print("No stats returned; wrote empty file.")
-            raise SystemExit(0)
-
-          print("Stats rows:", len(stats_pd), "selected_season:", selected_season)
-          print("Stats columns (sample):", list(stats_pd.columns)[:60])
-
-          # Identify key columns in stats
-          col_season = pick_col(stats_pd, "season")
-          col_week = pick_col(stats_pd, "week")
-          col_season_type = pick_col(stats_pd, "season_type", "game_type")
-          col_player_id = pick_col(stats_pd, "player_id")
-
-          if not col_week or not col_player_id:
-            raise RuntimeError("player_stats missing required columns (week/player_id).")
+          required = ["player_id", "week"]
+          for c in required:
+            if c not in df.columns:
+              raise RuntimeError(f"Missing required column: {c}")
 
           # Normalize
-          if col_season:
-            stats_pd[col_season] = pd.to_numeric(stats_pd[col_season], errors="coerce")
-          stats_pd[col_week] = pd.to_numeric(stats_pd[col_week], errors="coerce")
+          df["week"] = pd.to_numeric(df["week"], errors="coerce")
+          if "season" in df.columns:
+            df["season"] = pd.to_numeric(df["season"], errors="coerce")
 
-          if col_season_type:
-            stats_pd[col_season_type] = stats_pd[col_season_type].astype(str).str.upper()
+          if "season_type" in df.columns:
+            df["season_type"] = df["season_type"].astype(str).str.upper()
           else:
-            stats_pd["_season_type"] = "REG"
-            col_season_type = "_season_type"
+            df["season_type"] = "REG"
 
-          # Filter to selected season + REG + completed weeks
-          if col_season:
-            stats_pd = stats_pd[stats_pd[col_season] == float(selected_season)]
-          stats_pd = stats_pd[stats_pd[col_season_type].str.contains("REG", na=False)]
+          # Filter to REG + completed weeks
+          df = df[df["season_type"].str.contains("REG", na=False)].copy()
+          df = df[df["week"].between(1, LAST_COMPLETED)].copy()
 
-          data_max_week = int(pd.to_numeric(stats_pd[col_week], errors="coerce").dropna().max() or 0)
-          last_completed = min(SLEEPER_LAST_COMPLETED, data_max_week)
+          data_max_week = int(pd.to_numeric(df["week"], errors="coerce").dropna().max() or 0)
+          print("After filter rows:", len(df), "data_max_week:", data_max_week, "last_completed_target:", LAST_COMPLETED)
 
-          stats_pd = stats_pd[(stats_pd[col_week] >= 1) & (stats_pd[col_week] <= last_completed)].copy()
-
-          print("After filter: rows=", len(stats_pd), "data_max_week=", data_max_week, "using_last_completed=", last_completed)
-
-          # -------- Load players for ID crosswalk (GSIS -> Sleeper) --------
-          players = nfl.load_players()
-          players_pd = pl_to_pd(players)
-          print("Players rows:", len(players_pd))
-          print("Players columns (sample):", list(players_pd.columns)[:60])
-
-          # nflverse players dataset typically has gsis_id and sleeper_id
-          col_gsis = pick_col(players_pd, "gsis_id", "gsisid", "gsis")
-          col_sleeper = pick_col(players_pd, "sleeper_id", "sleeperid", "sleeper")
-
-          if not col_gsis or not col_sleeper:
-            # As a fallback, do NOT hard fail: emit file with no mapping so you can see columns in artifact
-            out = {
-              "season": selected_season,
-              "generated_at": nowz(),
-              "last_completed_week": last_completed,
-              "source": "nflreadpy.load_player_stats + nflreadpy.load_players (no sleeper_id column found)",
-              "weeks": {},
-              "build_meta": {
-                "tried_seasons": tried,
-                "stats_columns": list(stats_pd.columns),
-                "players_columns": list(players_pd.columns)
-              }
-            }
-            with open("data/stats-static.json", "w", encoding="utf-8") as f:
-              json.dump(out, f, indent=2)
-            print("Missing gsis_id/sleeper_id columns in players; wrote debug file.")
-            raise SystemExit(0)
-
-          players_pd[col_gsis] = players_pd[col_gsis].astype(str)
-          players_pd[col_sleeper] = players_pd[col_sleeper].astype(str)
-
-          gsis_to_sleeper = dict(
-            players_pd[[col_gsis, col_sleeper]]
-              .dropna()
-              .loc[players_pd[col_gsis].str.len() > 0]
-              .values
-          )
-
-          # Map stats player_id -> sleeper_id
-          stats_pd["_sleeper_id"] = stats_pd[col_player_id].astype(str).map(gsis_to_sleeper)
-          stats_pd = stats_pd[stats_pd["_sleeper_id"].notna()].copy()
-          print("After GSIS->Sleeper mapping: rows=", len(stats_pd))
-
-          # -------- Extract stat columns robustly --------
-          # Candidate column names differ by dataset version; pick what exists.
-          def col(*names):
-            return pick_col(stats_pd, *names)
-
-          c_player_name = col("player_display_name", "player_name", "name")
-          c_team = col("recent_team", "team", "posteam")
-          c_pos = col("position", "pos")
-
-          # Passing
-          c_cmp = col("completions", "pass_cmp")
-          c_att = col("attempts", "pass_att")
-          c_pass_yd = col("passing_yards", "pass_yd", "pass_yards")
-          c_pass_td = col("passing_tds", "pass_td", "pass_touchdowns")
-          c_int = col("interceptions", "pass_int", "interception")
-
-          # Rushing
-          c_rush_att = col("carries", "rush_att", "rushing_attempts")
-          c_rush_yd = col("rushing_yards", "rush_yd", "rush_yards")
-          c_rush_td = col("rushing_tds", "rush_td", "rush_touchdowns")
-
-          # Receiving
-          c_rec = col("receptions", "rec")
-          c_tgt = col("targets", "rec_tgt", "tgt")
-          c_rec_yd = col("receiving_yards", "rec_yd", "rec_yards")
-          c_rec_td = col("receiving_tds", "rec_td", "rec_touchdowns")
-
-          # Fumbles
-          c_fum = col("fumbles", "fum")
-          c_fum_lost = col("fumbles_lost", "fum_lost")
-
-          # Fantasy
-          c_fp = col("fantasy_points", "fantasy_points_ppr")  # keep both if possible
-          c_fp_ppr = col("fantasy_points_ppr", "fantasy_points_ppr_offense")
-
-          # Build weeks JSON
+          # Build weeks: { "1": { "<player_id>": { ...all stats... } } }
+          # Use player_id from dataset (typically GSIS id). No Sleeper mapping here.
           weeks = {}
-          for wk, g in stats_pd.groupby(stats_pd[col_week].astype(int)):
+
+          # Convert NaN -> None for JSON
+          def clean_value(v):
+            if v is None:
+              return None
+            try:
+              if pd.isna(v):
+                return None
+            except Exception:
+              pass
+            if isinstance(v, (pd.Timestamp, datetime.datetime)):
+              return v.isoformat()
+            return v
+
+          # Determine which columns to keep:
+          # Keep everything except season_type duplication is fine; keep all stat fields.
+          keep_cols = [c for c in df.columns]
+
+          for wk, g in df.groupby(df["week"].astype(int)):
             wk = str(int(wk))
             weeks[wk] = {}
             for _, r in g.iterrows():
-              sid = str(r["_sleeper_id"])
-              weeks[wk][sid] = {
-                "player_name": str(r[c_player_name]) if c_player_name and pd.notna(r[c_player_name]) else "",
-                "team": str(r[c_team]) if c_team and pd.notna(r[c_team]) else "",
-                "pos": str(r[c_pos]).upper() if c_pos and pd.notna(r[c_pos]) else "",
-
-                "pass_cmp": to_int(r[c_cmp]) if c_cmp else 0,
-                "pass_att": to_int(r[c_att]) if c_att else 0,
-                "pass_yd": to_float(r[c_pass_yd]) if c_pass_yd else 0.0,
-                "pass_td": to_int(r[c_pass_td]) if c_pass_td else 0,
-                "pass_int": to_int(r[c_int]) if c_int else 0,
-
-                "rush_att": to_int(r[c_rush_att]) if c_rush_att else 0,
-                "rush_yd": to_float(r[c_rush_yd]) if c_rush_yd else 0.0,
-                "rush_td": to_int(r[c_rush_td]) if c_rush_td else 0,
-
-                "rec": to_int(r[c_rec]) if c_rec else 0,
-                "rec_tgt": to_int(r[c_tgt]) if c_tgt else 0,
-                "rec_yd": to_float(r[c_rec_yd]) if c_rec_yd else 0.0,
-                "rec_td": to_int(r[c_rec_td]) if c_rec_td else 0,
-
-                "fum": to_int(r[c_fum]) if c_fum else 0,
-                "fum_lost": to_int(r[c_fum_lost]) if c_fum_lost else 0,
-
-                "fantasy_points": to_float(r[c_fp]) if c_fp else 0.0,
-                "fantasy_points_ppr": to_float(r[c_fp_ppr]) if c_fp_ppr else 0.0,
-              }
+              pid = str(r["player_id"])
+              row_obj = {}
+              for c in keep_cols:
+                row_obj[c] = clean_value(r[c])
+              weeks[wk][pid] = row_obj
 
           out = {
-            "season": selected_season,
+            "season": SEASON,
             "generated_at": nowz(),
-            "last_completed_week": last_completed,
-            "source": "nflreadpy.load_player_stats + nflreadpy.load_players",
-            "weeks": weeks,
-            "build_meta": {
-              "sleeper_state": {
-                "season": SLEEPER_SEASON,
-                "week": SLEEPER_WEEK,
-                "last_completed_week": SLEEPER_LAST_COMPLETED
-              },
-              "data_max_week": data_max_week,
-              "mapped_rows": int(len(stats_pd)),
-              "tried_seasons": tried
-            }
+            "last_completed_week_target": LAST_COMPLETED,
+            "data_max_week_in_file": data_max_week,
+            "source": "nflreadpy.load_player_stats",
+            "weeks": weeks
           }
 
-          with open("data/stats-static.json", "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2)
+          path = "data/player-stats-raw.json"
+          with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, ensure_ascii=False)
 
-          print("Wrote data/stats-static.json; weeks=", len(weeks))
+          print("Wrote:", path, "weeks:", len(weeks))
           if weeks:
             w0 = sorted(weeks.keys(), key=lambda x: int(x))[0]
             k0 = next(iter(weeks[w0].keys()))
-            print("Sample:", w0, k0, weeks[w0][k0])
+            print("Sample week/player:", w0, k0)
+            print("Sample keys:", list(weeks[w0][k0].keys())[:25])
           PY
 
-          test -f data/stats-static.json
+          test -f data/player-stats-raw.json
           ls -la data
-          head -n 40 data/stats-static.json
+          head -n 40 data/player-stats-raw.json
 
       - name: Commit and push (stats-bot branch)
         run: |
@@ -302,6 +153,6 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git checkout -B stats-bot
-          git add data/stats-static.json
-          git commit -m "Update static player stats (week ${SLEEPER_WEEK})" || exit 0
+          git add data/player-stats-raw.json
+          git commit -m "Update raw weekly player stats (week ${WEEK})" || exit 0
           git push -u origin stats-bot --force
