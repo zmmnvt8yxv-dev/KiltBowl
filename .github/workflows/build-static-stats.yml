@@ -3,6 +3,7 @@ name: Build Static Player Stats JSON
 on:
   workflow_dispatch:
   schedule:
+    # Tuesdays after MNF
     - cron: "0 10 * * 2"
 
 permissions:
@@ -23,188 +24,177 @@ jobs:
         run: |
           set -euxo pipefail
           curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
-          cat nfl_state.json
           echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
           echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
 
-      - name: Install Python deps
+      - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install pandas pyarrow
 
-      - name: Build data/stats-static.json from nflverse parquet
+      - name: Build data/stats-static.json (nflverse parquet)
         run: |
           set -euxo pipefail
           mkdir -p data
 
           python3 - <<'PY'
-          import json, os, re, datetime
+          import os, json, re, datetime
           import pandas as pd
 
           SEASON = int(os.environ["SEASON"])
           CURRENT_WEEK = int(os.environ["WEEK"])
-          LAST_COMPLETED = max(0, CURRENT_WEEK - 1)
+          LAST_COMPLETED_WEEK = max(0, CURRENT_WEEK - 1)
 
-          parquet_url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.parquet"
-          sleeper_players_url = "https://api.sleeper.app/v1/players/nfl"
+          PARQUET_URL = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.parquet"
+          SLEEPER_URL = "https://api.sleeper.app/v1/players/nfl"
 
-          # Sleeper players into DataFrame
-          sleeper_players = pd.read_json(sleeper_players_url).T
+          # ---------- helpers ----------
+          def norm_str(v):
+            if v is None:
+              return ""
+            if not isinstance(v, str):
+              v = str(v)
+            return v.strip()
 
-          gsis_to_sleeper = {}
-          fallback = {}
+          def norm_name(v):
+            v = norm_str(v).lower()
+            v = re.sub(r"[^a-z\s\-\.]", "", v)
+            v = re.sub(r"\s+", " ", v).strip()
+            return v
 
-          def norm_name(s):
-            s = (s or "").strip().lower()
-            s = re.sub(r"[^a-z\s\-\.]", "", s)
-            s = re.sub(r"\s+", " ", s).strip()
-            return s
-
-          for sleeper_id, row in sleeper_players.iterrows():
-            gsis = str(row.get("gsis_id") or "").strip()
-            if gsis:
-              gsis_to_sleeper[gsis] = str(sleeper_id)
-
-            full = row.get("full_name") or (f"{row.get('first_name','')} {row.get('last_name','')}".strip())
-            team = str(row.get("team") or "").strip()
-            pos  = str(row.get("position") or "").strip().upper()
-            nk = norm_name(full)
-            if nk and team and pos:
-              fallback[(nk, team, pos)] = str(sleeper_id)
-
-          # Read nflverse parquet
-          df = pd.read_parquet(parquet_url)
-
-          # Debug: confirm columns exist
-          cols = df.columns.tolist()
-          print("player_stats columns sample:", cols[:40])
-
-          # Normalize required fields
-          if "season" not in df.columns or "week" not in df.columns:
-            raise RuntimeError("player_stats missing season/week columns")
-
-          df["season"] = pd.to_numeric(df["season"], errors="coerce")
-          df["week"] = pd.to_numeric(df["week"], errors="coerce")
-
-          if "season_type" in df.columns:
-            df["season_type"] = df["season_type"].astype(str).str.upper()
-          else:
-            # some releases may use 'season_type' or 'game_type'
-            df["season_type"] = "REG"
-
-          df = df[
-            (df["season"] == SEASON) &
-            (df["season_type"] == "REG") &
-            (df["week"].between(1, LAST_COMPLETED))
-          ].copy()
-
-          print("Rows after filter:", len(df))
-
-          def map_sleeper_id(r):
-            gsis = str(r.get("player_id") or "").strip()
-            if gsis and gsis in gsis_to_sleeper:
-              return gsis_to_sleeper[gsis]
-
-            name = norm_name(r.get("player_display_name") or r.get("player_name") or "")
-            team = str(r.get("recent_team") or r.get("team") or "").strip()
-            pos  = str(r.get("position") or "").strip().upper()
-            return fallback.get((name, team, pos), None)
-
-          df["sleeper_id"] = df.apply(map_sleeper_id, axis=1)
-          df = df[df["sleeper_id"].notna()].copy()
-          print("Rows after sleeper mapping:", len(df))
-
-          # Helpers
           def to_int(v):
             try:
-              return int(float(v)) if v is not None and v != "" else 0
+              return int(float(v))
             except Exception:
               return 0
 
           def to_float(v):
             try:
-              return float(v) if v is not None and v != "" else 0.0
+              return float(v)
             except Exception:
               return 0.0
 
-          def g(r, *names):
-            for n in names:
-              if n in r and pd.notna(r[n]):
-                return r[n]
+          def first_val(row, *cols):
+            for c in cols:
+              if c in row and pd.notna(row[c]):
+                return row[c]
             return None
 
+          # ---------- load sleeper players ----------
+          sleeper_df = pd.read_json(SLEEPER_URL).T
+
+          gsis_to_sleeper = {}
+          fallback = {}
+
+          for sid, r in sleeper_df.iterrows():
+            gsis = norm_str(r.get("gsis_id"))
+            if gsis:
+              gsis_to_sleeper[gsis] = str(sid)
+
+            name = norm_name(
+              r.get("full_name")
+              or f"{r.get('first_name','')} {r.get('last_name','')}"
+            )
+            team = norm_str(r.get("team"))
+            pos = norm_str(r.get("position")).upper()
+
+            if name and team and pos:
+              fallback[(name, team, pos)] = str(sid)
+
+          # ---------- load nflverse parquet ----------
+          df = pd.read_parquet(PARQUET_URL)
+
+          df["season"] = pd.to_numeric(df["season"], errors="coerce")
+          df["week"] = pd.to_numeric(df["week"], errors="coerce")
+          df["season_type"] = df.get("season_type", "REG").astype(str).str.upper()
+
+          df = df[
+            (df["season"] == SEASON) &
+            (df["season_type"] == "REG") &
+            (df["week"].between(1, LAST_COMPLETED_WEEK))
+          ].copy()
+
+          # ---------- map to sleeper ids ----------
+          def map_sleeper(row):
+            pid = norm_str(row.get("player_id"))
+            if pid and pid in gsis_to_sleeper:
+              return gsis_to_sleeper[pid]
+
+            name = norm_name(first_val(row, "player_display_name", "player_name"))
+            team = norm_str(first_val(row, "recent_team", "team"))
+            pos = norm_str(row.get("position")).upper()
+            return fallback.get((name, team, pos))
+
+          df["sleeper_id"] = df.apply(map_sleeper, axis=1)
+          df = df[df["sleeper_id"].notna()].copy()
+
+          # ---------- build output ----------
           weeks = {}
 
-          for wk, gdf in df.groupby(df["week"].astype(int)):
-            wk_key = str(int(wk))
-            weeks[wk_key] = {}
+          for wk, g in df.groupby(df["week"].astype(int)):
+            wk = str(int(wk))
+            weeks[wk] = {}
 
-            for _, r in gdf.iterrows():
+            for _, r in g.iterrows():
               sid = str(r["sleeper_id"])
-
-              weeks[wk_key][sid] = {
-                "player_name": str(g(r, "player_display_name", "player_name") or ""),
-                "team": str(g(r, "recent_team", "team") or ""),
-                "pos": str(g(r, "position") or "").upper(),
+              weeks[wk][sid] = {
+                "player_name": norm_str(first_val(r, "player_display_name", "player_name")),
+                "team": norm_str(first_val(r, "recent_team", "team")),
+                "pos": norm_str(r.get("position")).upper(),
 
                 # Passing
-                "pass_cmp": to_int(g(r, "completions")),
-                "pass_att": to_int(g(r, "attempts")),
-                "pass_yd":  to_float(g(r, "passing_yards")),
-                "pass_td":  to_int(g(r, "passing_tds")),
-                "pass_int": to_int(g(r, "interceptions")),
+                "pass_cmp": to_int(r.get("completions")),
+                "pass_att": to_int(r.get("attempts")),
+                "pass_yd": to_float(r.get("passing_yards")),
+                "pass_td": to_int(r.get("passing_tds")),
+                "pass_int": to_int(r.get("interceptions")),
 
                 # Rushing
-                "rush_att": to_int(g(r, "carries")),
-                "rush_yd":  to_float(g(r, "rushing_yards")),
-                "rush_td":  to_int(g(r, "rushing_tds")),
+                "rush_att": to_int(r.get("carries")),
+                "rush_yd": to_float(r.get("rushing_yards")),
+                "rush_td": to_int(r.get("rushing_tds")),
 
                 # Receiving
-                "rec":     to_int(g(r, "receptions")),
-                "rec_tgt": to_int(g(r, "targets")),
-                "rec_yd":  to_float(g(r, "receiving_yards")),
-                "rec_td":  to_int(g(r, "receiving_tds")),
+                "rec": to_int(r.get("receptions")),
+                "rec_tgt": to_int(r.get("targets")),
+                "rec_yd": to_float(r.get("receiving_yards")),
+                "rec_td": to_int(r.get("receiving_tds")),
 
                 # Fumbles
-                "fum":      to_int(g(r, "fumbles")),
-                "fum_lost": to_int(g(r, "fumbles_lost")),
+                "fum": to_int(r.get("fumbles")),
+                "fum_lost": to_int(r.get("fumbles_lost")),
 
-                # Fantasy (if present)
-                "fantasy_points_ppr": to_float(g(r, "fantasy_points_ppr")),
-                "fantasy_points":     to_float(g(r, "fantasy_points")),
+                # Fantasy
+                "fantasy_points_ppr": to_float(r.get("fantasy_points_ppr")),
+                "fantasy_points": to_float(r.get("fantasy_points")),
               }
 
           out = {
             "season": SEASON,
             "generated_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "last_completed_week": LAST_COMPLETED,
+            "last_completed_week": LAST_COMPLETED_WEEK,
             "source": "nflverse/nflverse-data player_stats (parquet)",
             "weeks": weeks,
           }
 
           with open("data/stats-static.json", "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
+            json.dump(out, f, indent=2)
 
-          print("Wrote data/stats-static.json; weeks =", len(weeks))
+          print("Wrote data/stats-static.json")
+          print("Weeks:", len(weeks))
           if weeks:
-            first_week = sorted(weeks.keys(), key=lambda x: int(x))[0]
-            any_sid = next(iter(weeks[first_week].keys()))
-            print("Example:", first_week, any_sid, weeks[first_week][any_sid])
+            w0 = sorted(weeks.keys(), key=lambda x: int(x))[0]
+            k0 = next(iter(weeks[w0]))
+            print("Sample:", w0, k0, weeks[w0][k0])
           PY
 
-          test -f data/stats-static.json
-          ls -la data
-          head -n 30 data/stats-static.json
-
-      - name: Commit and push to stats-bot branch
+      - name: Commit and push (stats-bot branch)
         run: |
           set -euxo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
           git checkout -B stats-bot
-          git add -f data/stats-static.json
-          git status
-
+          git add data/stats-static.json
           git commit -m "Update static player stats (week ${WEEK})" || exit 0
           git push -u origin stats-bot --force
