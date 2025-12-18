@@ -34,28 +34,7 @@ let modalLastFocusedEl = null;
 // Keys should be Sleeper player_id (string).
 const NEWS_OVERRIDES = {
   // "96": { mult: 1.30, note: "Expected to start (+30%)" },
-  // "1234": { mult: 1.10, note: "Expected increased role (+10%)" },
 };
-
-function getNewsMultiplierAndNote(sleeperPlayerId, sleeperPlayerObj) {
-  const pid = String(sleeperPlayerId ?? sleeperPlayerObj?.player_id ?? "");
-  const override = NEWS_OVERRIDES[pid];
-  if (override && Number.isFinite(Number(override.mult))) {
-    return { mult: Number(override.mult), note: String(override.note || "Manual adjustment") };
-  }
-
-  const injury = String(sleeperPlayerObj?.injury_status || "").toLowerCase();
-  const practice = String(sleeperPlayerObj?.practice_participation || "").toLowerCase();
-  const status = String(sleeperPlayerObj?.status || "").toLowerCase();
-
-  if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
-  if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
-  if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
-  if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
-  if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
-
-  return { mult: 1.0, note: "" };
-}
 
 // ------------------------------
 // Utilities
@@ -97,6 +76,36 @@ function setImgSrc(id, src) {
 
 function getEl(id) {
   return document.getElementById(id);
+}
+
+function safeText(v) {
+  return v === undefined || v === null ? "" : String(v);
+}
+
+function buildEspnPlayerUrl(playerObj) {
+  const espnId = playerObj?.espn_id ?? playerObj?.espnId;
+  if (!espnId) return "";
+  return `https://www.espn.com/nfl/player/_/id/${encodeURIComponent(String(espnId))}`;
+}
+
+function getNewsMultiplierAndNote(sleeperPlayerId, sleeperPlayerObj) {
+  const pid = String(sleeperPlayerId ?? sleeperPlayerObj?.player_id ?? "");
+  const override = NEWS_OVERRIDES[pid];
+  if (override && Number.isFinite(Number(override.mult))) {
+    return { mult: Number(override.mult), note: String(override.note || "Manual adjustment") };
+  }
+
+  const injury = String(sleeperPlayerObj?.injury_status || "").toLowerCase();
+  const practice = String(sleeperPlayerObj?.practice_participation || "").toLowerCase();
+  const status = String(sleeperPlayerObj?.status || "").toLowerCase();
+
+  if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
+  if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
+  if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
+  if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
+  if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
+
+  return { mult: 1.0, note: "" };
 }
 
 // ------------------------------
@@ -159,7 +168,6 @@ function rs(row, key) {
 // ------------------------------
 function getHeadshotUrlForGsis(gsisId) {
   if (!rawStatsBundle?.weeks) return "";
-
   const gsis = String(gsisId || "");
   if (!gsis) return "";
 
@@ -175,8 +183,7 @@ function getHeadshotUrlForGsis(gsisId) {
 }
 
 function getHeadshotUrlForSleeperPlayer(sleeperPlayerObj) {
-  const gsis = sleeperPlayerObj?.gsis_id;
-  return getHeadshotUrlForGsis(gsis);
+  return getHeadshotUrlForGsis(sleeperPlayerObj?.gsis_id);
 }
 
 // ------------------------------
@@ -423,16 +430,10 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
   const actionsEl = getEl("player-modal-actions");
   const bodyEl = getEl("player-modal-body");
 
-  if (titleEl) titleEl.textContent = title;
-  if (subEl) subEl.textContent = subtitle;
+  if (titleEl) titleEl.textContent = title || "";
+  if (subEl) subEl.textContent = subtitle || "";
   if (actionsEl) actionsEl.innerHTML = actionsHtml || "";
   if (bodyEl) bodyEl.innerHTML = bodyHtml || "";
-}
-
-function buildEspnPlayerUrl(playerObj) {
-  const espnId = playerObj?.espn_id ?? playerObj?.espnId;
-  if (!espnId) return "";
-  return `https://www.espn.com/nfl/player/_/id/${encodeURIComponent(String(espnId))}`;
 }
 
 // Show modal stats from /data/player-stats-raw.json (joined by Sleeper player.gsis_id)
@@ -446,13 +447,13 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
 
   if (!sleeperPlayer) return;
 
-  const name = String(
+  const name = safeText(
     sleeperPlayer?.full_name ||
     (sleeperPlayer?.first_name ? `${sleeperPlayer.first_name} ${sleeperPlayer.last_name}` : "Player")
   );
 
-  const position = String(sleeperPlayer?.position || "").toUpperCase();
-  const team = String(sleeperPlayer?.team || "");
+  const position = safeText(sleeperPlayer?.position || "").toUpperCase();
+  const team = safeText(sleeperPlayer?.team || "");
 
   const espnUrl = buildEspnPlayerUrl(sleeperPlayer);
   const actions = espnUrl
@@ -463,11 +464,11 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     title: name,
     subtitle: `${team ? team + " • " : ""}${position}`.trim(),
     actionsHtml: actions,
-    bodyHtml: `<div class="player-loading">Loading stats…</div>`,
+    bodyHtml: `<div class="player-muted">Loading stats…</div>`,
   });
   openPlayerModal();
 
-  const gsis = String(sleeperPlayer?.gsis_id || "");
+  const gsis = safeText(sleeperPlayer?.gsis_id || "");
   if (!gsis) {
     renderPlayerModalContent({
       title: name,
@@ -486,12 +487,12 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
       title: name,
       subtitle: `${team ? team + " • " : ""}${position}`.trim(),
       actionsHtml: actions,
-      bodyHtml: `<div class="player-muted">Failed to load raw stats file: ${escapeHtml(e?.message || String(e))}</div>`,
+      bodyHtml: `<div class="player-muted">Failed to load ${escapeHtml(RAW_STATS_URL)}: ${escapeHtml(e?.message || String(e))}</div>`,
     });
     return;
   }
 
-  const headshotUrl = getHeadshotUrlForGsis(gsis);
+  const headshotUrl = getHeadshotUrlForSleeperPlayer(sleeperPlayer);
 
   const rawMaxWeek = getRawMaxWeek(bundle);
   const weeksToShow = getLastNCompletedWeeks(DISPLAY_WEEK, rawMaxWeek, 6);
@@ -522,8 +523,10 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
       subtitle: `${team ? team + " • " : ""}${position}`.trim(),
       actionsHtml: actions,
       bodyHtml: `
-        ${headshotUrl ? `<div class="player-headshot-wrap"><img class="player-headshot" src="${escapeHtml(headshotUrl)}" alt="${escapeHtml(name)} headshot"></div>` : ""}
-        <div class="player-muted">No raw stats found for GSIS ${escapeHtml(gsis)} in weeks ${escapeHtml(String(weeksToShow[0] || ""))}-${escapeHtml(String(weeksToShow[weeksToShow.length - 1] || ""))}.</div>
+        ${headshotUrl ? `<img class="player-headshot" src="${escapeHtml(headshotUrl)}" width="120" height="120" alt="${escapeHtml(name)} headshot">` : ""}
+        <div class="player-muted" style="margin-top:12px;">
+          No raw stats found for GSIS ${escapeHtml(gsis)} in weeks ${escapeHtml(String(weeksToShow[0] || ""))}-${escapeHtml(String(weeksToShow[weeksToShow.length - 1] || ""))}.
+        </div>
       `,
     });
     return;
@@ -596,10 +599,10 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     : "";
 
   const metaNote =
-    `<div class="player-muted" style="margin-top:8px;">Source: data/player-stats-raw.json (GSIS ${escapeHtml(gsis)}).</div>`;
+    `<div class="player-muted" style="margin-top:8px;">Source: ${escapeHtml(RAW_STATS_URL)} (GSIS ${escapeHtml(gsis)}).</div>`;
 
   const headshotHtml = headshotUrl
-    ? `<div class="player-headshot-wrap"><img class="player-headshot" src="${escapeHtml(headshotUrl)}" alt="${escapeHtml(name)} headshot"></div>`
+    ? `<img class="player-headshot" src="${escapeHtml(headshotUrl)}" width="120" height="120" alt="${escapeHtml(name)} headshot" style="margin-bottom:12px;">`
     : "";
 
   renderPlayerModalContent({
@@ -612,6 +615,8 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
 
 // ------------------------------
 // Starters list rendering (Sleeper)
+// IMPORTANT: use class="player-headshot" so CSS constrains it.
+// Also set explicit width/height attributes to prevent layout blowups.
 // ------------------------------
 function renderStarters(starterIds = [], containerId, playersPoints = {}, projections = {}) {
   const container = getEl(containerId);
@@ -659,10 +664,12 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
           open();
         }
       });
+    } else {
+      card.style.cursor = "default";
     }
 
     card.innerHTML = `
-      ${headshotUrl ? `<img class="player-card-headshot" src="${escapeHtml(headshotUrl)}" alt="${escapeHtml(name)} headshot">` : ``}
+      ${headshotUrl ? `<img class="player-headshot" src="${escapeHtml(headshotUrl)}" width="42" height="42" alt="${escapeHtml(name)} headshot">` : ``}
       <div class="player-info">
         <span class="player-name">${escapeHtml(name)} (${escapeHtml(position)})</span>
         <div class="player-details">${escapeHtml(teamShort || "N/A")} • ${escapeHtml(oppText)}</div>
@@ -727,7 +734,7 @@ async function initializeApp() {
     await getAllPlayers();
     await fetchInitialContext();
 
-    // Load raw stats in background; re-render once to paint headshots.
+    // Load raw stats in background; re-render once so headshots appear.
     loadRawStatsOnce()
       .then(() => fetchAndRenderData().catch(() => {}))
       .catch((e) => console.warn("Raw stats preload failed:", e));
