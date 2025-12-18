@@ -3,8 +3,10 @@ name: Build Static Sleeper Stats
 on:
   workflow_dispatch:
   schedule:
-    # Runs every Tuesday at 10:00 UTC (after MNF stats settle)
-    - cron: "0 10 * * 2"
+    - cron: "0 10 * * 2" # Tue 10:00 UTC
+
+permissions:
+  contents: write
 
 jobs:
   build-stats:
@@ -13,22 +15,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      - name: Install dependencies
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install js-yaml@4
+
       - name: Fetch current NFL week and season
-        id: nfl
         run: |
           curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
           echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
           echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
+          cat nfl_state.json
 
       - name: Build stats-static.yml
         run: |
-          node <<'EOF'
+          node --input-type=module <<'EOF'
           import fs from "fs";
           import yaml from "js-yaml";
 
@@ -38,12 +47,11 @@ jobs:
 
           async function fetchJson(url) {
             const res = await fetch(url);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
             return res.json();
           }
 
           const weeks = {};
-
           for (let w = 1; w <= lastCompletedWeek; w++) {
             const url = `https://api.sleeper.app/v1/stats/nfl/${season}/${w}`;
             try {
@@ -52,7 +60,7 @@ jobs:
               console.log(`Week ${w}: OK`);
             } catch (e) {
               weeks[String(w)] = null;
-              console.log(`Week ${w}: FAILED`);
+              console.log(`Week ${w}: FAILED (${e.message})`);
             }
           }
 
@@ -62,16 +70,26 @@ jobs:
             weeks
           };
 
-          fs.writeFileSync(
-            "stats-static.yml",
-            yaml.dump(output, { lineWidth: 120 })
-          );
+          const yml = yaml.dump(output, { lineWidth: 120, noRefs: true });
+          fs.writeFileSync("stats-static.yml", yml, "utf8");
+
+          console.log("Wrote stats-static.yml");
+          console.log(`Season=${season} lastCompletedWeek=${lastCompletedWeek}`);
           EOF
 
-      - name: Commit stats-static.yml
+      - name: Show generated file
+        run: |
+          ls -la
+          test -f stats-static.yml
+          head -n 40 stats-static.yml
+
+      - name: Commit and push
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add stats-static.yml
-          git commit -m "Update static Sleeper stats (week ${WEEK})" || echo "No changes"
+
+          git add stats-static.yml package.json package-lock.json
+          git status
+
+          git commit -m "Update static Sleeper stats (week ${WEEK})" || echo "No changes to commit"
           git push
