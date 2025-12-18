@@ -1,0 +1,38 @@
+// node build_stats_static.js 2024 1 18
+// outputs stats-static.json
+
+const fs = require("fs");
+
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+  return res.json();
+}
+
+async function main() {
+  const season = Number(process.argv[2] || "2024");
+  const startWeek = Number(process.argv[3] || "1");
+  const endWeek = Number(process.argv[4] || "18");
+
+  const weeks = {};
+  for (let w = startWeek; w <= endWeek; w++) {
+    const url = `https://api.sleeper.app/v1/stats/nfl/${season}/${w}`;
+    try {
+      const data = await fetchJson(url);
+      weeks[String(w)] = data || null;
+      console.log(`week ${w}: ok`);
+    } catch (e) {
+      weeks[String(w)] = null;
+      console.log(`week ${w}: fail (${e.message})`);
+    }
+  }
+
+  const out = { season, generated_at: new Date().toISOString(), weeks };
+  fs.writeFileSync("stats-static.json", JSON.stringify(out, null, 2));
+  console.log("wrote stats-static.json");
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
