@@ -35,13 +35,183 @@ let rawStats = {
 };
 
 // ------------------------------
+// League scoring (your settings)
+// ------------------------------
+const LEAGUE_SCORING = {
+  passing: {
+    yards_per_point: 25, // +0.04 per yard
+    td: 4,
+    two_pt: 2,
+    int: -1,
+    // 40/50+ pass TD bonuses not computable from weekly totals reliably (needs play-level data)
+  },
+  rushing: {
+    yards_per_point: 10, // +0.1 per yard
+    td: 6,
+    two_pt: 2,
+    // 40/50+ rush TD bonuses not computable from weekly totals reliably
+  },
+  receiving: {
+    rec: 0.5,
+    yards_per_point: 10, // +0.1 per yard
+    td: 6,
+    two_pt: 2,
+    // 40/50+ rec TD bonuses not computable from weekly totals reliably
+  },
+  kicking: {
+    fg_made_0_19: 3,
+    fg_made_20_29: 3,
+    fg_made_30_39: 3,
+    fg_made_40_49: 4,
+    fg_made_50_plus: 5,
+    pat_made: 1,
+    // Misses: interpret range-specific values as overrides; remaining misses use base -1
+    fg_miss_base: -1,
+    fg_miss_0_19: -2,
+    fg_miss_20_29: -2,
+    fg_miss_30_39: -2,
+    fg_miss_40_49: -1,
+    pat_miss: -2,
+  },
+  misc: {
+    fumble_lost: -2,
+    fumble_recovery_td: 6,
+    special_teams_td: 6,
+  },
+  bonus: {
+    pass_300_399: 2,
+    pass_400_plus: 4,
+    rush_100_199: 2,
+    rush_200_plus: 4,
+    rec_100_199: 2,
+    rec_200_plus: 4,
+  },
+};
+
+function n0(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clampInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+function computeLeaguePointsFromRaw(row) {
+  if (!row) return 0;
+
+  // Passing
+  const passYds = n0(row.passing_yards);
+  const passTD = n0(row.passing_tds);
+  const pass2pt = n0(row.passing_2pt_conversions);
+  const passInt = n0(row.passing_interceptions);
+
+  let pts =
+    passYds / LEAGUE_SCORING.passing.yards_per_point +
+    passTD * LEAGUE_SCORING.passing.td +
+    pass2pt * LEAGUE_SCORING.passing.two_pt +
+    passInt * LEAGUE_SCORING.passing.int;
+
+  // Passing bonuses (yardage)
+  if (passYds >= 400) pts += LEAGUE_SCORING.bonus.pass_400_plus;
+  else if (passYds >= 300) pts += LEAGUE_SCORING.bonus.pass_300_399;
+
+  // Rushing
+  const rushYds = n0(row.rushing_yards);
+  const rushTD = n0(row.rushing_tds);
+  const rush2pt = n0(row.rushing_2pt_conversions);
+
+  pts +=
+    rushYds / LEAGUE_SCORING.rushing.yards_per_point +
+    rushTD * LEAGUE_SCORING.rushing.td +
+    rush2pt * LEAGUE_SCORING.rushing.two_pt;
+
+  // Rushing bonuses (yardage)
+  if (rushYds >= 200) pts += LEAGUE_SCORING.bonus.rush_200_plus;
+  else if (rushYds >= 100) pts += LEAGUE_SCORING.bonus.rush_100_199;
+
+  // Receiving
+  const rec = n0(row.receptions);
+  const tgt = n0(row.targets); // not scored but displayed
+  const recYds = n0(row.receiving_yards);
+  const recTD = n0(row.receiving_tds);
+  const rec2pt = n0(row.receiving_2pt_conversions);
+
+  pts +=
+    rec * LEAGUE_SCORING.receiving.rec +
+    recYds / LEAGUE_SCORING.receiving.yards_per_point +
+    recTD * LEAGUE_SCORING.receiving.td +
+    rec2pt * LEAGUE_SCORING.receiving.two_pt;
+
+  // Receiving bonuses (yardage)
+  if (recYds >= 200) pts += LEAGUE_SCORING.bonus.rec_200_plus;
+  else if (recYds >= 100) pts += LEAGUE_SCORING.bonus.rec_100_199;
+
+  // Kicking
+  const fg0 = clampInt(row.fg_made_0_19);
+  const fg20 = clampInt(row.fg_made_20_29);
+  const fg30 = clampInt(row.fg_made_30_39);
+  const fg40 = clampInt(row.fg_made_40_49);
+  const fg50 = Math.max(
+    0,
+    clampInt(row.fg_made) - (fg0 + fg20 + fg30 + fg40)
+  );
+
+  pts +=
+    fg0 * LEAGUE_SCORING.kicking.fg_made_0_19 +
+    fg20 * LEAGUE_SCORING.kicking.fg_made_20_29 +
+    fg30 * LEAGUE_SCORING.kicking.fg_made_30_39 +
+    fg40 * LEAGUE_SCORING.kicking.fg_made_40_49 +
+    fg50 * LEAGUE_SCORING.kicking.fg_made_50_plus;
+
+  const patMade = clampInt(row.pat_made);
+  const patMiss = clampInt(row.pat_missed);
+
+  pts += patMade * LEAGUE_SCORING.kicking.pat_made;
+  pts += patMiss * LEAGUE_SCORING.kicking.pat_miss;
+
+  // FG misses: use bucket misses when available, override base for those
+  const miss0 = clampInt(row.fg_missed_0_19);
+  const miss20 = clampInt(row.fg_missed_20_29);
+  const miss30 = clampInt(row.fg_missed_30_39);
+  const miss40 = clampInt(row.fg_missed_40_49);
+
+  const totalMiss = clampInt(row.fg_missed);
+  const bucketed = miss0 + miss20 + miss30 + miss40;
+  const remaining = Math.max(0, totalMiss - bucketed);
+
+  pts += miss0 * LEAGUE_SCORING.kicking.fg_miss_0_19;
+  pts += miss20 * LEAGUE_SCORING.kicking.fg_miss_20_29;
+  pts += miss30 * LEAGUE_SCORING.kicking.fg_miss_30_39;
+  pts += miss40 * LEAGUE_SCORING.kicking.fg_miss_40_49;
+  pts += remaining * LEAGUE_SCORING.kicking.fg_miss_base;
+
+  // Misc
+  const fumLost =
+    clampInt(row.rushing_fumbles_lost) +
+    clampInt(row.receiving_fumbles_lost) +
+    clampInt(row.sack_fumbles_lost);
+
+  pts += fumLost * LEAGUE_SCORING.misc.fumble_lost;
+
+  const frTd = clampInt(row.fumble_recovery_tds);
+  pts += frTd * LEAGUE_SCORING.misc.fumble_recovery_td;
+
+  const stTd = clampInt(row.special_teams_tds);
+  pts += stTd * LEAGUE_SCORING.misc.special_teams_td;
+
+  return Number.isFinite(pts) ? pts : 0;
+}
+
+// ------------------------------
 // GSIS fallback index (name/team/pos)
 // ------------------------------
 let rawIndexBuilt = false;
 let rawIndex = {
-  byNameTeamPos: new Map(),   // key: normName|TEAM|POS -> gsis
-  byNamePos: new Map(),       // key: normName|POS -> gsis
-  byLastInitTeam: new Map(),  // key: last|init|TEAM -> gsis
+  byNameTeamPos: new Map(), // key: normName|TEAM|POS -> gsis
+  byNamePos: new Map(), // key: normName|POS -> gsis
+  byLastInitTeam: new Map(), // key: last|init|TEAM -> gsis
 };
 
 let gsisFallbackCacheBySleeperId = {}; // { sleeper_player_id: gsis_id }
@@ -195,7 +365,6 @@ function buildRawIndexOnce() {
   const maxWeek = Number(rawStats.maxWeek || 0);
   if (!maxWeek) return;
 
-  // Prefer latest week; include a few prior weeks
   const candidateWeeks = [];
   candidateWeeks.push(String(maxWeek));
   for (let w = maxWeek - 1; w >= 1 && w >= maxWeek - 3; w -= 1) candidateWeeks.push(String(w));
@@ -213,7 +382,6 @@ function buildRawIndexOnce() {
       if (n && team && pos) rawIndex.byNameTeamPos.set(`${n}|${team}|${pos}`, gsis);
       if (n && pos) rawIndex.byNamePos.set(`${n}|${pos}`, gsis);
 
-      // Handle A.Rodgers style
       const rawShort = String(row?.player_name || "");
       const shortInit = (rawShort.split(".")[0] || "").toLowerCase();
       const shortLastRaw = rawShort.includes(".") ? rawShort.split(".").slice(1).join(".") : "";
@@ -230,7 +398,6 @@ function buildRawIndexOnce() {
 function resolveGsisIdForSleeperPlayer(player) {
   if (!player) return "";
 
-  // Direct from Sleeper (best)
   if (player.gsis_id) return String(player.gsis_id);
 
   const sleeperPid = String(player.player_id || "");
@@ -247,18 +414,14 @@ function resolveGsisIdForSleeperPlayer(player) {
   const full = player.full_name || `${player.first_name || ""} ${player.last_name || ""}`.trim();
   const n = normName(full);
 
-  // 1) name+team+pos
   let gsis = rawIndex.byNameTeamPos.get(`${n}|${team}|${pos}`) || "";
-
-  // 2) name+pos
   if (!gsis) gsis = rawIndex.byNamePos.get(`${n}|${pos}`) || "";
 
-  // 3) last+init+team
   if (!gsis) {
     const li = lastInit(full);
     const last = li.last.replace(/[^a-z]/g, "");
     const init = li.init.toLowerCase();
-    gsis = rawIndex.byLastInitTeam.get(`${last}|${init}|${team}`) || "";
+    gsis = rawIndex.byLastInitTeam.get(`${last}|${init}|${team}`,) || "";
   }
 
   if (gsis && sleeperPid) gsisFallbackCacheBySleeperId[sleeperPid] = gsis;
@@ -591,34 +754,41 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
   if (bodyEl) bodyEl.innerHTML = bodyHtml;
 }
 
-function buildRecentAndExpectedTable(rows, expectedRaw) {
+function buildRecentAndExpectedTable(rows, expectedRowForScoring) {
+  const rowToDisplay = (r) => {
+    const ppr = computeLeaguePointsFromRaw(r);
+    return `
+      <tr>
+        <td>${escapeHtml(String(r.week ?? ""))}</td>
+        <td>${escapeHtml(formatStatValue(ppr))}</td>
+        <td>${escapeHtml(formatStatValue(r.carries))}-${escapeHtml(formatStatValue(r.rushing_yards))} (${escapeHtml(formatStatValue(r.rushing_tds))} TD)</td>
+        <td>${escapeHtml(formatStatValue(r.receptions))}/${escapeHtml(formatStatValue(r.targets))}-${escapeHtml(formatStatValue(r.receiving_yards))} (${escapeHtml(formatStatValue(r.receiving_tds))} TD)</td>
+        <td>${escapeHtml(formatStatValue(r.passing_yards))} (${escapeHtml(formatStatValue(r.passing_tds))} TD, ${escapeHtml(formatStatValue(r.passing_interceptions))} INT)</td>
+      </tr>
+    `;
+  };
+
+  const expectedPts = computeLeaguePointsFromRaw(expectedRowForScoring);
+
   return `
     <table class="player-table" aria-label="Recent stats + expected">
       <thead>
         <tr>
           <th>Week</th>
-          <th>PPR</th>
+          <th>League Pts</th>
           <th>Rush</th>
           <th>Rec/Tgt</th>
           <th>Pass</th>
         </tr>
       </thead>
       <tbody>
-        ${rows.map(r => `
-          <tr>
-            <td>${escapeHtml(String(r.week))}</td>
-            <td>${escapeHtml(formatStatValue(r.fantasy_points_ppr))}</td>
-            <td>${escapeHtml(formatStatValue(r.carries))}-${escapeHtml(formatStatValue(r.rushing_yards))} (${escapeHtml(formatStatValue(r.rushing_tds))} TD)</td>
-            <td>${escapeHtml(formatStatValue(r.receptions))}/${escapeHtml(formatStatValue(r.targets))}-${escapeHtml(formatStatValue(r.receiving_yards))} (${escapeHtml(formatStatValue(r.receiving_tds))} TD)</td>
-            <td>${escapeHtml(formatStatValue(r.passing_yards))} (${escapeHtml(formatStatValue(r.passing_tds))} TD, ${escapeHtml(formatStatValue(r.passing_interceptions))} INT)</td>
-          </tr>
-        `).join("")}
+        ${rows.map(rowToDisplay).join("")}
         <tr>
           <td><strong>Expected</strong></td>
-          <td><strong>${escapeHtml(formatStatValue(expectedRaw.fantasy_points_ppr))}</strong></td>
-          <td><strong>${escapeHtml(formatStatValue(expectedRaw.carries))}-${escapeHtml(formatStatValue(expectedRaw.rushing_yards))} (${escapeHtml(formatStatValue(expectedRaw.rushing_tds))} TD)</strong></td>
-          <td><strong>${escapeHtml(formatStatValue(expectedRaw.receptions))}/${escapeHtml(formatStatValue(expectedRaw.targets))}-${escapeHtml(formatStatValue(expectedRaw.receiving_yards))} (${escapeHtml(formatStatValue(expectedRaw.receiving_tds))} TD)</strong></td>
-          <td><strong>${escapeHtml(formatStatValue(expectedRaw.passing_yards))} (${escapeHtml(formatStatValue(expectedRaw.passing_tds))} TD, ${escapeHtml(formatStatValue(expectedRaw.passing_interceptions))} INT)</strong></td>
+          <td><strong>${escapeHtml(formatStatValue(expectedPts))}</strong></td>
+          <td><strong>${escapeHtml(formatStatValue(expectedRowForScoring.carries))}-${escapeHtml(formatStatValue(expectedRowForScoring.rushing_yards))} (${escapeHtml(formatStatValue(expectedRowForScoring.rushing_tds))} TD)</strong></td>
+          <td><strong>${escapeHtml(formatStatValue(expectedRowForScoring.receptions))}/${escapeHtml(formatStatValue(expectedRowForScoring.targets))}-${escapeHtml(formatStatValue(expectedRowForScoring.receiving_yards))} (${escapeHtml(formatStatValue(expectedRowForScoring.receiving_tds))} TD)</strong></td>
+          <td><strong>${escapeHtml(formatStatValue(expectedRowForScoring.passing_yards))} (${escapeHtml(formatStatValue(expectedRowForScoring.passing_tds))} TD, ${escapeHtml(formatStatValue(expectedRowForScoring.passing_interceptions))} INT)</strong></td>
         </tr>
       </tbody>
     </table>
@@ -682,21 +852,47 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     return;
   }
 
+  // Weighted expected row (keep the stat fields needed by computeLeaguePointsFromRaw)
   const weights = rows.map((_, i) => i + 1);
   const wAvg = (key) => weightedAvg(rows.map((r, i) => ({ v: s(r, key), w: weights[i] })));
 
-  const expectedRaw = {
-    fantasy_points_ppr: wAvg("fantasy_points_ppr"),
+  const expectedRow = {
+    week: "Expected",
+    // passing
+    passing_yards: wAvg("passing_yards"),
+    passing_tds: wAvg("passing_tds"),
+    passing_interceptions: wAvg("passing_interceptions"),
+    passing_2pt_conversions: wAvg("passing_2pt_conversions"),
+    // rushing
     carries: wAvg("carries"),
     rushing_yards: wAvg("rushing_yards"),
     rushing_tds: wAvg("rushing_tds"),
+    rushing_2pt_conversions: wAvg("rushing_2pt_conversions"),
+    // receiving
     receptions: wAvg("receptions"),
     targets: wAvg("targets"),
     receiving_yards: wAvg("receiving_yards"),
     receiving_tds: wAvg("receiving_tds"),
-    passing_yards: wAvg("passing_yards"),
-    passing_tds: wAvg("passing_tds"),
-    passing_interceptions: wAvg("passing_interceptions"),
+    receiving_2pt_conversions: wAvg("receiving_2pt_conversions"),
+    // kicking
+    fg_made: wAvg("fg_made"),
+    fg_made_0_19: wAvg("fg_made_0_19"),
+    fg_made_20_29: wAvg("fg_made_20_29"),
+    fg_made_30_39: wAvg("fg_made_30_39"),
+    fg_made_40_49: wAvg("fg_made_40_49"),
+    fg_missed: wAvg("fg_missed"),
+    fg_missed_0_19: wAvg("fg_missed_0_19"),
+    fg_missed_20_29: wAvg("fg_missed_20_29"),
+    fg_missed_30_39: wAvg("fg_missed_30_39"),
+    fg_missed_40_49: wAvg("fg_missed_40_49"),
+    pat_made: wAvg("pat_made"),
+    pat_missed: wAvg("pat_missed"),
+    // misc
+    rushing_fumbles_lost: wAvg("rushing_fumbles_lost"),
+    receiving_fumbles_lost: wAvg("receiving_fumbles_lost"),
+    sack_fumbles_lost: wAvg("sack_fumbles_lost"),
+    fumble_recovery_tds: wAvg("fumble_recovery_tds"),
+    special_teams_tds: wAvg("special_teams_tds"),
   };
 
   let headshot = "";
@@ -708,17 +904,20 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
   const headshotHtml = headshot
     ? `<div style="display:flex;gap:14px;align-items:center;margin-top:6px;margin-bottom:6px;">
          <img class="player-headshot" src="${escapeHtml(headshot)}" alt="${escapeHtml(name)} headshot" />
-         <div class="player-muted">Raw stats: weeks ${escapeHtml(String(weeksToFetch[0]))}–${escapeHtml(String(weeksToFetch[weeksToFetch.length - 1]))}</div>
+         <div class="player-muted">League scoring applied (yardage bonuses included).</div>
        </div>`
-    : `<div class="player-muted" style="margin-top:6px;margin-bottom:6px;">Raw stats: weeks ${escapeHtml(String(weeksToFetch[0]))}–${escapeHtml(String(weeksToFetch[weeksToFetch.length - 1]))}</div>`;
+    : `<div class="player-muted" style="margin-top:6px;margin-bottom:6px;">League scoring applied (yardage bonuses included).</div>`;
 
-  const table = buildRecentAndExpectedTable(rows, expectedRaw);
+  const table = buildRecentAndExpectedTable(rows, expectedRow);
 
   renderPlayerModalContent({
     title: name,
     subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
     actionsHtml: actions,
-    bodyHtml: `${headshotHtml}${table}`,
+    bodyHtml: `${headshotHtml}${table}
+      <div class="player-muted" style="margin-top:8px;">
+        Notes: 40+/50+ TD distance bonuses require play-level data and are not computed from weekly totals. Team Defense scoring not shown here.
+      </div>`,
   });
 }
 
