@@ -1,9 +1,9 @@
-name: Build Static Sleeper Stats
+name: Build Static Sleeper Stats JSON
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 10 * * 2" # Tue 10:00 UTC
+    - cron: "0 10 * * 2"
 
 permissions:
   contents: write
@@ -16,8 +16,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: true
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Fetch current NFL week and season
         run: |
@@ -69,16 +69,27 @@ jobs:
 
           test -f data/stats-static.json
           ls -la data
-          head -n 30 data/stats-static.json
+          head -n 20 data/stats-static.json
 
-      - name: Commit and push
+      - name: Show ignore status (common root cause)
+        run: |
+          set -euxo pipefail
+          echo "---- .gitignore (if present) ----"
+          test -f .gitignore && cat .gitignore || echo "no .gitignore"
+          echo "---- git check-ignore ----"
+          git check-ignore -v data/stats-static.json || echo "NOT ignored"
+
+      - name: Commit and push to stats-bot branch
         run: |
           set -euxo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          git add data/stats-static.json
+          git checkout -B stats-bot
+
+          # Force-add in case data/ is ignored
+          git add -f data/stats-static.json
           git status
 
           git commit -m "Update static Sleeper stats (week ${WEEK})" || exit 0
-          git push
+          git push -u origin stats-bot --force
