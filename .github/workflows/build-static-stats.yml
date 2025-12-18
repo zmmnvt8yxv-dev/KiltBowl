@@ -1,4 +1,4 @@
-name: Build Static Sleeper Stats JSON
+name: Build Static Player Stats JSON
 
 on:
   workflow_dispatch:
@@ -19,77 +19,185 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Fetch current NFL week and season
+      - name: Fetch current NFL week and season (Sleeper)
         run: |
           set -euxo pipefail
           curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
-          cat nfl_state.json
           echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
           echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
 
-      - name: Build data/stats-static.json
+      - name: Build data/stats-static.json from nflverse player_stats
         run: |
           set -euxo pipefail
           mkdir -p data
 
           python3 - <<'PY'
-          import json, os, urllib.request, datetime
+          import csv, io, json, os, re, urllib.request, datetime
+          from collections import defaultdict
 
-          season = int(os.environ["SEASON"])
-          current_week = int(os.environ["WEEK"])
-          last_completed = max(0, current_week - 1)
+          SEASON = int(os.environ["SEASON"])
+          CURRENT_WEEK = int(os.environ["WEEK"])
+          LAST_COMPLETED = max(0, CURRENT_WEEK - 1)
+
+          def fetch_text(url):
+            with urllib.request.urlopen(url, timeout=90) as r:
+              return r.read().decode("utf-8")
 
           def fetch_json(url):
-            with urllib.request.urlopen(url, timeout=60) as r:
+            with urllib.request.urlopen(url, timeout=90) as r:
               return json.loads(r.read().decode("utf-8"))
 
-          weeks = {}
-          for w in range(1, last_completed + 1):
-            url = f"https://api.sleeper.app/v1/stats/nfl/{season}/{w}"
+          # nflverse weekly player stats (boxscore-ish)
+          # Source: nflverse/nflverse-data releases "player_stats"
+          # parquet example exists in docs; CSV is also published alongside parquet in the same release.
+          player_stats_csv_url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.csv"
+
+          # Sleeper players list (for mapping)
+          sleeper_players_url = "https://api.sleeper.app/v1/players/nfl"
+
+          print("Downloading sleeper players…")
+          sleeper_players = fetch_json(sleeper_players_url) or {}
+
+          # Map 1: gsis_id -> sleeper_id
+          gsis_to_sleeper = {}
+          # Map 2 fallback: (name_key, team, pos) -> sleeper_id
+          key_to_sleeper = {}
+
+          def norm_name(s):
+            s = (s or "").strip().lower()
+            s = re.sub(r"[^a-z\s\-\.]", "", s)
+            s = re.sub(r"\s+", " ", s).strip()
+            return s
+
+          for sleeper_id, p in sleeper_players.items():
+            if not isinstance(p, dict):
+              continue
+            gsis = (p.get("gsis_id") or "").strip()
+            if gsis:
+              gsis_to_sleeper[gsis] = sleeper_id
+
+            full = p.get("full_name") or (f'{p.get("first_name","")} {p.get("last_name","")}'.strip())
+            team = (p.get("team") or "").strip()
+            pos = (p.get("position") or "").strip().upper()
+            nk = norm_name(full)
+            if nk and team and pos:
+              key_to_sleeper[(nk, team, pos)] = sleeper_id
+
+          print("Downloading nflverse player_stats.csv…")
+          csv_text = fetch_text(player_stats_csv_url)
+          reader = csv.DictReader(io.StringIO(csv_text))
+
+          # Output: weeks[week][sleeper_id] = stats
+          weeks = defaultdict(dict)
+
+          def to_int(x):
             try:
-              data = fetch_json(url)
-              weeks[str(w)] = data if data else None
-              print(f"Week {w}: OK")
-            except Exception as e:
-              weeks[str(w)] = None
-              print(f"Week {w}: FAILED ({e})")
+              if x is None or x == "": return 0
+              return int(float(x))
+            except: return 0
+
+          def to_float(x):
+            try:
+              if x is None or x == "": return 0.0
+              return float(x)
+            except: return 0.0
+
+          kept = 0
+          mapped = 0
+
+          for row in reader:
+            season = to_int(row.get("season"))
+            if season != SEASON:
+              continue
+
+            # nflverse uses season_type like REG/POST
+            st = (row.get("season_type") or "").upper()
+            if st and st != "REG":
+              continue
+
+            wk = to_int(row.get("week"))
+            if wk < 1 or wk > LAST_COMPLETED:
+              continue
+
+            gsis = (row.get("player_id") or "").strip()
+            display_name = row.get("player_display_name") or row.get("player_name") or ""
+            pos = (row.get("position") or "").upper().strip()
+            team = (row.get("recent_team") or row.get("team") or "").strip()
+
+            sleeper_id = gsis_to_sleeper.get(gsis)
+
+            if not sleeper_id:
+              nk = norm_name(display_name)
+              if nk and team and pos:
+                sleeper_id = key_to_sleeper.get((nk, team, pos))
+
+            if not sleeper_id:
+              continue
+
+            kept += 1
+            mapped += 1
+
+            stats = {
+              "player_name": display_name,
+              "team": team,
+              "pos": pos,
+
+              # Passing
+              "pass_cmp": to_int(row.get("completions")),
+              "pass_att": to_int(row.get("attempts")),
+              "pass_yd": to_float(row.get("passing_yards")),
+              "pass_td": to_int(row.get("passing_tds")),
+              "pass_int": to_int(row.get("interceptions")),
+
+              # Rushing
+              "rush_att": to_int(row.get("carries")),
+              "rush_yd": to_float(row.get("rushing_yards")),
+              "rush_td": to_int(row.get("rushing_tds")),
+
+              # Receiving
+              "rec": to_int(row.get("receptions")),
+              "rec_tgt": to_int(row.get("targets")),
+              "rec_yd": to_float(row.get("receiving_yards")),
+              "rec_td": to_int(row.get("receiving_tds")),
+
+              # Fumbles (varies by feed; keep common ones if present)
+              "fum": to_int(row.get("fumbles")),
+              "fum_lost": to_int(row.get("fumbles_lost")),
+
+              # Fantasy (nflverse uses multiple; keep ppr if present)
+              "fantasy_points_ppr": to_float(row.get("fantasy_points_ppr")),
+              "fantasy_points": to_float(row.get("fantasy_points")),
+            }
+
+            weeks[str(wk)][str(sleeper_id)] = stats
 
           out = {
-            "season": season,
+            "season": SEASON,
             "generated_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "last_completed_week": last_completed,
-            "weeks": weeks
+            "last_completed_week": LAST_COMPLETED,
+            "source": "nflverse/nflverse-data player_stats (csv)",
+            "weeks": weeks,
           }
 
           with open("data/stats-static.json", "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
 
-          print("Wrote data/stats-static.json")
+          print(f"Wrote data/stats-static.json; weeks={len(weeks)}; mapped_rows={mapped}")
           PY
 
           test -f data/stats-static.json
           ls -la data
-          head -n 20 data/stats-static.json
+          head -n 30 data/stats-static.json
 
-      - name: Show ignore status (common root cause)
-        run: |
-          set -euxo pipefail
-          echo "---- .gitignore (if present) ----"
-          test -f .gitignore && cat .gitignore || echo "no .gitignore"
-          echo "---- git check-ignore ----"
-          git check-ignore -v data/stats-static.json || echo "NOT ignored"
-
-      - name: Commit and push to stats-bot branch
+      - name: Commit and push (stats-bot branch)
         run: |
           set -euxo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
           git checkout -B stats-bot
-
-          # Force-add in case data/ is ignored
           git add -f data/stats-static.json
           git status
 
-          git commit -m "Update static Sleeper stats (week ${WEEK})" || exit 0
+          git commit -m "Update static player stats (week ${WEEK})" || exit 0
           git push -u origin stats-bot --force
