@@ -25,7 +25,38 @@ let lastUpdatedTime = null;
 
 // Weekly stats cache: { [weekNumber]: statsPayload }
 let statsCacheByWeek = {};
+// Manual “news” overrides you can edit anytime (multiplier + note)
+const NEWS_OVERRIDES = {
+  // Example:
+  // "1234": { mult: 1.30, note: "Expected to start (+30%)" },
+  // "5678": { mult: 1.10, note: "Expected increased role (+10%)" },
+};
 
+function getNewsMultiplierAndNote(player) {
+  const pid = String(player?.player_id ?? "");
+  const override = NEWS_OVERRIDES[pid];
+  if (override && Number.isFinite(Number(override.mult))) {
+    return { mult: Number(override.mult), note: String(override.note || "Manual adjustment") };
+  }
+
+  // Automatic rules from Sleeper player fields
+  const injury = String(player?.injury_status || "").toLowerCase();
+  const practice = String(player?.practice_participation || "").toLowerCase();
+  const status = String(player?.status || "").toLowerCase();
+
+  // Hard outs
+  if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
+
+  // Injury-based heuristics (tweakable)
+  if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
+  if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
+
+  // Practice-based heuristics
+  if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
+  if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
+
+  return { mult: 1.0, note: "" };
+}
 // Modal state
 let modalIsOpen = false;
 let modalLastFocusedEl = null;
@@ -74,7 +105,30 @@ function setImgSrc(id, src) {
   const el = document.getElementById(id);
   if (el && el.tagName === "IMG") el.src = src;
 }
+function getLastNWeeksCompleted(currentWeek, n) {
+  const weeks = [];
+  for (let w = Math.max(1, currentWeek - n); w <= Math.max(1, currentWeek - 1); w += 1) weeks.push(w);
+  return weeks;
+}
 
+// Weighted average: more recent weeks count more
+function weightedAvg(values) {
+  // values is [{v:number, w:number}]
+  let num = 0, den = 0;
+  for (const { v, w } of values) {
+    if (!Number.isFinite(v) || !Number.isFinite(w)) continue;
+    num += v * w;
+    den += w;
+  }
+  return den > 0 ? num / den : 0;
+}
+
+// Pull stat safely
+function s(obj, key) {
+  const v = obj?.[key];
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 // ------------------------------
 // Player modal helpers
 // Requires HTML elements with ids:
@@ -221,68 +275,108 @@ async function showPlayerDetailsModal(playerId) {
 
   const season = Number(nflState?.season) || new Date().getFullYear();
   const currentWeek = Number(DISPLAY_WEEK);
+const weeksToFetch = getLastNWeeksCompleted(currentWeek, 6);
 
-  // last 5 completed weeks prior to DISPLAY_WEEK
-  const weeksToFetch = [];
-  for (let w = Math.max(1, currentWeek - 5); w <= Math.max(1, currentWeek - 1); w += 1) {
-    weeksToFetch.push(w);
-  }
+// fetch week payloads
+const weekPayloads = [];
+for (const w of weeksToFetch) {
+  let payload = null;
+  try { payload = await fetchStatsForWeekCached(season, w); } catch (_) { payload = null; }
+  weekPayloads.push({ week: w, payload });
+}
 
-  const gameLogRows = [];
-  for (const w of weeksToFetch) {
-    let payload = null;
-    try {
-      payload = await fetchStatsForWeekCached(season, w);
-    } catch (_) {
-      payload = null;
-    }
-
-    const statsObj = getPlayerStatsFromWeekPayload(payload, playerId);
-    const pts = statsObj?.pts_ppr ?? statsObj?.fantasy_points ?? statsObj?.points;
-    gameLogRows.push({ week: w, pts: formatStatValue(pts), note: statsObj ? "" : "No data" });
-  }
-
-  const latestProjections = window.__latestProjections || {};
-  const projObj = latestProjections?.[String(playerId)] || latestProjections?.[Number(playerId)] || null;
-  const projPts = getProjectedPoints(projObj);
-
-  const gameLogTable = `
-    <table class="player-table" aria-label="Game log">
-      <thead>
-        <tr><th>Week</th><th>PPR Pts</th><th>Notes</th></tr>
-      </thead>
-      <tbody>
-        ${gameLogRows
-          .map(
-            (r) =>
-              `<tr><td>${r.week}</td><td>${escapeHtml(r.pts)}</td><td class="player-muted">${escapeHtml(
-                r.note || ""
-              )}</td></tr>`
-          )
-          .join("")}
-      </tbody>
-    </table>
-  `;
-
-  const projPanel = `
-    <div class="player-kv">
-      <div class="k">Projected (PPR)</div><div>${escapeHtml(formatStatValue(projPts))}</div>
-      <div class="k">Week</div><div>${escapeHtml(String(currentWeek))}</div>
-    </div>
-  `;
-
-  renderPlayerModalContent({
-    title: name,
-    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
-    actionsHtml: actions,
-    bodyHtml: `
-      <div class="player-modal-grid">
-        <div class="player-panel"><h3>Projection</h3>${projPanel}</div>
-        <div class="player-panel" style="grid-column: 1 / -1;"><h3>Recent game log</h3>${gameLogTable}</div>
-      </div>
-    `,
+// build per-week rows (use stats keys you care about)
+const rows = [];
+for (const { week, payload } of weekPayloads) {
+  const statsObj = getPlayerStatsFromWeekPayload(payload, playerId);
+  const pts = s(statsObj, "pts_ppr"); // prefer pts_ppr when present
+  rows.push({
+    week,
+    pts,
+    rush_att: s(statsObj, "rush_att"),
+    rush_yd: s(statsObj, "rush_yd"),
+    rush_td: s(statsObj, "rush_td"),
+    rec: s(statsObj, "rec"),
+    rec_tgt: s(statsObj, "rec_tgt"),
+    rec_yd: s(statsObj, "rec_yd"),
+    rec_td: s(statsObj, "rec_td"),
+    pass_yd: s(statsObj, "pass_yd"),
+    pass_td: s(statsObj, "pass_td"),
+    pass_int: s(statsObj, "pass_int"),
   });
 }
+
+// recency weights: oldest=1 ... newest=6
+const weighted = (k) => weightedAvg(rows.map((r, i) => ({ v: Number(r[k] || 0), w: i + 1 })));
+
+const expectedRaw = {
+  pts: weighted("pts"),
+  rush_att: weighted("rush_att"),
+  rush_yd: weighted("rush_yd"),
+  rush_td: weighted("rush_td"),
+  rec: weighted("rec"),
+  rec_tgt: weighted("rec_tgt"),
+  rec_yd: weighted("rec_yd"),
+  rec_td: weighted("rec_td"),
+  pass_yd: weighted("pass_yd"),
+  pass_td: weighted("pass_td"),
+  pass_int: weighted("pass_int"),
+};
+
+const { mult, note } = getNewsMultiplierAndNote(player);
+const expectedAdj = {};
+for (const [k, v] of Object.entries(expectedRaw)) expectedAdj[k] = Number(v) * mult;
+
+// table: recent rows + expected rows
+const statTable = `
+  <table class="player-table" aria-label="Recent stats + expected">
+    <thead>
+      <tr>
+        <th>Week</th>
+        <th>PPR</th>
+        <th>Rush</th>
+        <th>Rec/Tgt</th>
+        <th>Pass</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map(r => `
+        <tr>
+          <td>${r.week}</td>
+          <td>${formatStatValue(r.pts)}</td>
+          <td>${formatStatValue(r.rush_att)}-${formatStatValue(r.rush_yd)} (${formatStatValue(r.rush_td)} TD)</td>
+          <td>${formatStatValue(r.rec)}/${formatStatValue(r.rec_tgt)}-${formatStatValue(r.rec_yd)} (${formatStatValue(r.rec_td)} TD)</td>
+          <td>${formatStatValue(r.pass_yd)} (${formatStatValue(r.pass_td)} TD, ${formatStatValue(r.pass_int)} INT)</td>
+        </tr>
+      `).join("")}
+
+      <tr>
+        <td><strong>Expected</strong></td>
+        <td><strong>${formatStatValue(expectedRaw.pts)}</strong></td>
+        <td><strong>${formatStatValue(expectedRaw.rush_att)}-${formatStatValue(expectedRaw.rush_yd)} (${formatStatValue(expectedRaw.rush_td)} TD)</strong></td>
+        <td><strong>${formatStatValue(expectedRaw.rec)}/${formatStatValue(expectedRaw.rec_tgt)}-${formatStatValue(expectedRaw.rec_yd)} (${formatStatValue(expectedRaw.rec_td)} TD)</strong></td>
+        <td><strong>${formatStatValue(expectedRaw.pass_yd)} (${formatStatValue(expectedRaw.pass_td)} TD, ${formatStatValue(expectedRaw.pass_int)} INT)</strong></td>
+      </tr>
+
+      <tr>
+        <td><strong>Expected*</strong></td>
+        <td><strong>${formatStatValue(expectedAdj.pts)}</strong></td>
+        <td><strong>${formatStatValue(expectedAdj.rush_att)}-${formatStatValue(expectedAdj.rush_yd)} (${formatStatValue(expectedAdj.rush_td)} TD)</strong></td>
+        <td><strong>${formatStatValue(expectedAdj.rec)}/${formatStatValue(expectedAdj.rec_tgt)}-${formatStatValue(expectedAdj.rec_yd)} (${formatStatValue(expectedAdj.rec_td)} TD)</strong></td>
+        <td><strong>${formatStatValue(expectedAdj.pass_yd)} (${formatStatValue(expectedAdj.pass_td)} TD, ${formatStatValue(expectedAdj.pass_int)} INT)</strong></td>
+      </tr>
+    </tbody>
+  </table>
+`;
+
+const expectedNote = note ? `<div class="player-muted" style="margin-top:8px;">* Adjusted: ${escapeHtml(note)}</div>` : "";
+
+renderPlayerModalContent({
+  title: name,
+  subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
+  actionsHtml: actions,
+  bodyHtml: `${statTable}${expectedNote}`,
+});
 
 // ------------------------------
 // Step 1: NFL state (season/year)
