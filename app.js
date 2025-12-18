@@ -3,8 +3,7 @@ const LEAGUE_ID = "1262418074540195841";
 const USER_USERNAME = "conner27lax";
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds
 
-// Force the app to always display Week 16 (scoreboard/matchups)
-// Modal stats will use completed weeks capped at DISPLAY_WEEK-1.
+// Force the app to always display Week 16 for matchup scoreboard
 const DISPLAY_WEEK = 16;
 
 // --- Global Data Stores (Client-side Cache) ---
@@ -26,15 +25,16 @@ let scheduleByTeam = {}; // { TEAM: { opp: TEAM, homeAway: 'vs'|'@', gameStatus:
 let updateTimer = null;
 let lastUpdatedTime = null;
 
-// --- Static stats (YAML) ---
-let STATIC_STATS = null; // loaded from stats-static.yml
+// ---- Static stats (JSON) ----
+// Expected path: /data/stats-static.json
+let STATIC_STATS = null; // { season, generated_at, last_completed_week, weeks: { "1": payload, ... } }
 let statsCacheByWeek = {}; // { [weekNumber]: statsPayload }
 
 // Modal state
 let modalIsOpen = false;
 let modalLastFocusedEl = null;
 
-// Manual “news” overrides keyed by SLEEPER player_id (the ids in starters)
+// Manual “news” overrides keyed by Sleeper player_id (the ids in starters)
 const NEWS_OVERRIDES = {
   // "4046": { mult: 1.30, note: "Expected to start (+30%)" },
   // "1234": { mult: 1.10, note: "Expected increased role (+10%)" },
@@ -44,7 +44,7 @@ const NEWS_OVERRIDES = {
 // Utilities
 // ------------------------------
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`API request failed: ${response.status} for ${url}`);
   return response.json();
 }
@@ -83,11 +83,11 @@ function safeText(v) {
 }
 
 function pickSeason() {
-  // Prefer season from stats-static.yml if present, then league season, then nflState season
+  // Prefer static stats season if present
   return Number(STATIC_STATS?.season) || Number(LEAGUE_SEASON) || Number(nflState?.season) || new Date().getFullYear();
 }
 
-// Preserve missing vs real 0
+// Return null if missing/unparseable; distinguish from real 0
 function s(obj, key) {
   if (!obj) return null;
   const v = obj[key];
@@ -113,7 +113,7 @@ function weightedAvg(values) {
   return den > 0 ? num / den : null;
 }
 
-// Modal week logic: use completed weeks only, capped by DISPLAY_WEEK-1
+// Completed-week logic: use nflState.week-1, capped by DISPLAY_WEEK-1
 function getLastCompletedWeekCapped() {
   const nflWeek = Number(nflState?.week) || 0;
   const lastCompleted = Math.max(0, nflWeek - 1);
@@ -122,47 +122,34 @@ function getLastCompletedWeekCapped() {
 }
 
 // ------------------------------
-// Static stats (YAML) loader
+// Static stats loader (JSON)
 // ------------------------------
 async function loadStaticStatsOnce() {
   if (STATIC_STATS) return STATIC_STATS;
-
   try {
-    const res = await fetch("stats-static.yml", { cache: "no-store" });
-    if (!res.ok) throw new Error(`stats-static.yml HTTP ${res.status}`);
-    const text = await res.text();
-
-    // Requires js-yaml in index.html (window.jsyaml)
-    if (!window.jsyaml || typeof window.jsyaml.load !== "function") {
-      console.warn("jsyaml not found. Add js-yaml CDN before app.js to use stats-static.yml.");
-      STATIC_STATS = null;
-      return null;
-    }
-
-    const parsed = window.jsyaml.load(text);
-    STATIC_STATS = parsed && typeof parsed === "object" ? parsed : null;
-  } catch (e) {
+    const res = await fetch("data/stats-static.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`data/stats-static.json HTTP ${res.status}`);
+    const data = await res.json();
+    STATIC_STATS = data && typeof data === "object" ? data : null;
+  } catch (_) {
     STATIC_STATS = null;
   }
-
   return STATIC_STATS;
 }
 
-// static-first weekly stats fetch
 async function fetchStatsForWeekCached(season, week) {
   const w = Number(week);
-
   if (Object.prototype.hasOwnProperty.call(statsCacheByWeek, w)) return statsCacheByWeek[w];
 
-  // static file first
-  const staticBlob = await loadStaticStatsOnce();
-  if (staticBlob && Number(staticBlob.season) === Number(season)) {
-    const payload = staticBlob.weeks?.[String(w)] ?? null;
+  // static first
+  await loadStaticStatsOnce();
+  if (STATIC_STATS && Number(STATIC_STATS.season) === Number(season)) {
+    const payload = STATIC_STATS.weeks?.[String(w)] ?? null;
     statsCacheByWeek[w] = payload;
     return payload;
   }
 
-  // fallback to live Sleeper
+  // fallback live
   const url = `${API_BASE}/stats/nfl/${season}/${w}`;
   const data = await tryFetchFirst([url]);
   statsCacheByWeek[w] = data || null;
@@ -255,7 +242,6 @@ function getNewsMultiplierAndNote(playerId, playerObj) {
   if (status === "inactive" || injury === "out") return { mult: 0.0, note: "Out" };
   if (injury === "doubtful") return { mult: 0.40, note: "Doubtful (-60%)" };
   if (injury === "questionable") return { mult: 0.85, note: "Questionable (-15%)" };
-
   if (practice === "dnp" || practice === "did_not_participate") return { mult: 0.80, note: "DNP practice (-20%)" };
   if (practice === "limited") return { mult: 0.90, note: "Limited practice (-10%)" };
 
@@ -263,7 +249,7 @@ function getNewsMultiplierAndNote(playerId, playerObj) {
 }
 
 // ------------------------------
-// Sleeper state + players + league
+// Sleeper state + players + league context
 // ------------------------------
 async function getNFLState() {
   const url = `${API_BASE}/state/nfl`;
@@ -341,7 +327,7 @@ async function fetchScheduleForSeasonAndWeek(season, week) {
 // ------------------------------
 // Matchups
 // ------------------------------
-async function fetchDynamicData(week, _season) {
+async function fetchDynamicData(week) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
   const matchups = await fetchJson(matchupUrl);
 
@@ -372,7 +358,6 @@ function mergeAndRenderData(data) {
 
   const teamA = matchupTeams.find((t) => t && t.roster_id === leagueContext.userRosterId);
   const teamB = matchupTeams.find((t) => t && t.roster_id !== leagueContext.userRosterId);
-
   if (!teamA || !teamB) throw new Error("Could not identify both teams in the matchup.");
 
   const getTeamDetails = (matchupTeam) => {
@@ -472,6 +457,8 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}) {
           open();
         }
       });
+    } else {
+      card.style.cursor = "default";
     }
 
     card.innerHTML = `
@@ -608,9 +595,7 @@ async function showPlayerDetailsModal(playerId) {
 
   const { mult, note } = getNewsMultiplierAndNote(playerId, player);
   const expectedAdj = {};
-  for (const [k, v] of Object.entries(expectedRaw)) {
-    expectedAdj[k] = v === null || v === undefined ? null : Number(v) * mult;
-  }
+  for (const [k, v] of Object.entries(expectedRaw)) expectedAdj[k] = v == null ? null : Number(v) * mult;
 
   const cellRush = (r) => {
     if (r.rush_att == null && r.rush_yd == null && r.rush_td == null) return "—";
@@ -675,7 +660,9 @@ async function showPlayerDetailsModal(playerId) {
     : "";
 
   const sourceNote = STATIC_STATS
-    ? `<div class="player-muted" style="margin-top:8px;">Stats source: stats-static.yml (season ${escapeHtml(String(season))}). Weeks shown: ${escapeHtml(String(startWeek))}–${escapeHtml(String(lastCompleted))}.</div>`
+    ? `<div class="player-muted" style="margin-top:8px;">Stats source: data/stats-static.json (season ${escapeHtml(
+        String(season)
+      )}). Weeks shown: ${escapeHtml(String(startWeek))}–${escapeHtml(String(lastCompleted))}.</div>`
     : `<div class="player-muted" style="margin-top:8px;">Stats source: live Sleeper endpoint (fallback).</div>`;
 
   renderPlayerModalContent({
@@ -697,7 +684,7 @@ async function fetchAndRenderData() {
 
   await fetchScheduleForSeasonAndWeek(season, week);
 
-  const dynamicData = await fetchDynamicData(week, season);
+  const dynamicData = await fetchDynamicData(week);
   mergeAndRenderData(dynamicData);
 }
 
@@ -716,7 +703,7 @@ function startLiveUpdate() {
     if (countdownValue <= 0) {
       countdownValue = Math.floor(UPDATE_INTERVAL_MS / 1000);
       try {
-        await getNFLState(); // keeps current week updated for modal logic
+        await getNFLState(); // keeps current week fresh for modal completed-week logic
         await fetchAndRenderData();
       } catch (err) {
         console.error("Live update error:", err);
@@ -736,7 +723,7 @@ async function initializeApp() {
     await getAllPlayers();
     await fetchInitialContext();
 
-    // Load stats-static.yml if present (YAML parsing requires js-yaml on the page)
+    // Load static stats JSON if present
     await loadStaticStatsOnce();
 
     await fetchAndRenderData();
