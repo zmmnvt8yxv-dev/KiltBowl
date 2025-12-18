@@ -10,7 +10,6 @@
 <body>
   <div class="container">
 
-    <!-- Optional banner (safe to delete) -->
     <header class="kiltbowl-banner">
       <div>
         <h1>Kilt Bowl 2026</h1>
@@ -18,10 +17,8 @@
       </div>
     </header>
 
-    <!-- Loading / error -->
     <div id="loading">Loading scoreboard data...</div>
 
-    <!-- Main scoreboard -->
     <div id="scoreboard" class="hidden">
       <div class="header">
         <div class="team-header">
@@ -72,7 +69,7 @@
     </div>
   </div>
 
-  <!-- Player modal (required by app.js) -->
+  <!-- Player modal -->
   <div id="player-modal-backdrop" class="modal-backdrop" aria-hidden="true">
     <div class="player-modal" role="dialog" aria-modal="true" aria-labelledby="player-modal-title">
       <div class="player-modal-header">
@@ -92,6 +89,10 @@
     </div>
   </div>
 
+  <!-- REQUIRED for stats-static.yml parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+
+  <!-- Your app -->
   <script src="app.js"></script>
 </body>
 </html>
