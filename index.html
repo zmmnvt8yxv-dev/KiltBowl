@@ -5,9 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KiltBowl - Sleeper Fantasy Scoreboard</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+      .kiltbowl-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        margin: 0 0 16px 0;
+        border: 2px solid rgba(255, 255, 255, 0.15);
+        border-radius: 14px;
+        background: rgba(0, 0, 0, 0.25);
+        backdrop-filter: blur(6px);
+      }
+
+      .kiltbowl-banner h1 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0.5px;
+        line-height: 1.1;
+      }
+
+      .kiltbowl-banner .series-line {
+        margin-top: 6px;
+        font-size: 14px;
+        opacity: 0.9;
+        line-height: 1.3;
+      }
+
+      .kiltbowl-kilt {
+        width: 68px;
+        height: 68px;
+        flex: 0 0 auto;
+      }
+
+      .kiltbowl-kilt .stroke { stroke: currentColor; }
+      .kiltbowl-kilt .fill { fill: currentColor; }
+    </style>
 </head>
 <body>
     <div class="container">
+        <div class="kiltbowl-banner" aria-label="Kilt Bowl header">
+            <div>
+                <h1>Kilt Bowl 2026</h1>
+                <div class="series-line">Current series: Team conner27lax 1-0 Junction • Best of 3</div>
+            </div>
+
+            <svg class="kiltbowl-kilt" viewBox="0 0 128 128" role="img" aria-label="Kilt icon" xmlns="http://www.w3.org/2000/svg">
+                <path class="stroke" d="M38 18h52l6 26c-7 6-16 9-32 9s-25-3-32-9l6-26z" fill="none" stroke-width="4" stroke-linejoin="round"/>
+                <path class="stroke" d="M32 44c10 9 22 13 32 13s22-4 32-13l10 66c-10 7-25 12-42 12s-32-5-42-12l10-66z" fill="none" stroke-width="4" stroke-linejoin="round"/>
+                <path class="stroke" d="M48 58v54" fill="none" stroke-width="3" stroke-linecap="round"/>
+                <path class="stroke" d="M64 60v58" fill="none" stroke-width="3" stroke-linecap="round"/>
+                <path class="stroke" d="M80 58v54" fill="none" stroke-width="3" stroke-linecap="round"/>
+                <path class="stroke" d="M40 72h48" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+                <path class="stroke" d="M38 88h52" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+            </svg>
+        </div>
+
         <div id="loading">Loading scoreboard data...</div>
         
         <div id="scoreboard" class="hidden">
