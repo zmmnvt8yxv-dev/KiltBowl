@@ -35,13 +35,23 @@ let rawStats = {
 };
 
 // ------------------------------
+// GSIS fallback index (name/team/pos)
+// ------------------------------
+let rawIndexBuilt = false;
+let rawIndex = {
+  byNameTeamPos: new Map(),   // key: normName|TEAM|POS -> gsis
+  byNamePos: new Map(),       // key: normName|POS -> gsis
+  byLastInitTeam: new Map(),  // key: last|init|TEAM -> gsis
+};
+
+let gsisFallbackCacheBySleeperId = {}; // { sleeper_player_id: gsis_id }
+
+// ------------------------------
 // Utilities
 // ------------------------------
 async function fetchJson(url) {
   const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} for ${url}`);
-  }
+  if (!response.ok) throw new Error(`API request failed: ${response.status} for ${url}`);
   return response.json();
 }
 
@@ -102,17 +112,38 @@ function buildEspnPlayerUrl(playerObj) {
   return `https://www.espn.com/nfl/player/_/id/${encodeURIComponent(String(espnId))}`;
 }
 
+function normPos(pos) {
+  return String(pos || "").toUpperCase().trim();
+}
+
+function normName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\./g, " ")
+    .replace(/'/g, "")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .trim();
+}
+
+function lastInit(name) {
+  const n = normName(name);
+  if (!n) return { last: "", init: "" };
+  const parts = n.split(" ").filter(Boolean);
+  const init = parts[0]?.[0] || "";
+  const last = parts[parts.length - 1] || "";
+  return { last, init };
+}
+
+function s(obj, key) {
+  const v = obj?.[key];
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // ------------------------------
 // Load RAW_STATS_PATH (nflreadpy output)
-// Shape:
-/// {
-///   season: 2025,
-///   ...,
-///   weeks: {
-///     "1": { "00-0023459": { ... }, ... },
-///     "2": { ... }
-///   }
-/// }
 // ------------------------------
 async function loadRawStatsOnce() {
   if (rawStats.loaded) return;
@@ -125,7 +156,6 @@ async function loadRawStatsOnce() {
 
     rawStats.season = Number(payload?.season) || null;
 
-    // Determine max week present (either from metadata or by scanning keys)
     const metaMax =
       Number(payload?.data_max_week_in_file) ||
       Number(payload?.last_completed_week_target) ||
@@ -139,10 +169,9 @@ async function loadRawStatsOnce() {
 
     rawStats.maxWeek = Math.max(metaMax, scannedMax, 0);
     rawStats.loaded = true;
-
     console.log(`[rawStats] loaded season=${rawStats.season} maxWeek=${rawStats.maxWeek}`);
   } catch (e) {
-    rawStats.loaded = true; // prevent retry spam; you can refresh to retry
+    rawStats.loaded = true; // prevent retry spam
     rawStats.season = null;
     rawStats.maxWeek = 0;
     rawStats.weeks = {};
@@ -156,6 +185,84 @@ function getRawStatRowByGsis(weekNumber, gsisId) {
   const weekMap = rawStats.weeks?.[wk];
   if (!weekMap || typeof weekMap !== "object") return null;
   return weekMap[String(gsisId)] || null;
+}
+
+function buildRawIndexOnce() {
+  if (rawIndexBuilt) return;
+  rawIndexBuilt = true;
+
+  const weeksObj = rawStats.weeks || {};
+  const maxWeek = Number(rawStats.maxWeek || 0);
+  if (!maxWeek) return;
+
+  // Prefer latest week; include a few prior weeks
+  const candidateWeeks = [];
+  candidateWeeks.push(String(maxWeek));
+  for (let w = maxWeek - 1; w >= 1 && w >= maxWeek - 3; w -= 1) candidateWeeks.push(String(w));
+
+  for (const wk of candidateWeeks) {
+    const weekMap = weeksObj[wk];
+    if (!weekMap || typeof weekMap !== "object") continue;
+
+    for (const [gsis, row] of Object.entries(weekMap)) {
+      const display = row?.player_display_name || row?.player_name || "";
+      const team = String(row?.team || "").toUpperCase();
+      const pos = normPos(row?.position || "");
+      const n = normName(display);
+
+      if (n && team && pos) rawIndex.byNameTeamPos.set(`${n}|${team}|${pos}`, gsis);
+      if (n && pos) rawIndex.byNamePos.set(`${n}|${pos}`, gsis);
+
+      // Handle A.Rodgers style
+      const rawShort = String(row?.player_name || "");
+      const shortInit = (rawShort.split(".")[0] || "").toLowerCase();
+      const shortLastRaw = rawShort.includes(".") ? rawShort.split(".").slice(1).join(".") : "";
+      const shortLast = String(shortLastRaw || lastInit(display).last)
+        .toLowerCase()
+        .replace(/[^a-z]/g, "");
+
+      const init = (shortInit || lastInit(display).init).toLowerCase();
+      if (shortLast && init && team) rawIndex.byLastInitTeam.set(`${shortLast}|${init}|${team}`, gsis);
+    }
+  }
+}
+
+function resolveGsisIdForSleeperPlayer(player) {
+  if (!player) return "";
+
+  // Direct from Sleeper (best)
+  if (player.gsis_id) return String(player.gsis_id);
+
+  const sleeperPid = String(player.player_id || "");
+  if (sleeperPid && gsisFallbackCacheBySleeperId[sleeperPid]) {
+    return gsisFallbackCacheBySleeperId[sleeperPid];
+  }
+
+  if (!rawStats.loaded || !rawStats.maxWeek) return "";
+
+  buildRawIndexOnce();
+
+  const team = String(player.team || "").toUpperCase();
+  const pos = normPos(player.position || "");
+  const full = player.full_name || `${player.first_name || ""} ${player.last_name || ""}`.trim();
+  const n = normName(full);
+
+  // 1) name+team+pos
+  let gsis = rawIndex.byNameTeamPos.get(`${n}|${team}|${pos}`) || "";
+
+  // 2) name+pos
+  if (!gsis) gsis = rawIndex.byNamePos.get(`${n}|${pos}`) || "";
+
+  // 3) last+init+team
+  if (!gsis) {
+    const li = lastInit(full);
+    const last = li.last.replace(/[^a-z]/g, "");
+    const init = li.init.toLowerCase();
+    gsis = rawIndex.byLastInitTeam.get(`${last}|${init}|${team}`) || "";
+  }
+
+  if (gsis && sleeperPid) gsisFallbackCacheBySleeperId[sleeperPid] = gsis;
+  return gsis;
 }
 
 // ------------------------------
@@ -194,9 +301,7 @@ async function fetchInitialContext() {
   leagueContext.rosters = rosters;
 
   const userRoster = rosters.find((r) => r && r.owner_id === userId);
-  if (!userRoster) {
-    throw new Error(`Roster not found for user ${USER_USERNAME} in league ${LEAGUE_ID}.`);
-  }
+  if (!userRoster) throw new Error(`Roster not found for user ${USER_USERNAME} in league ${LEAGUE_ID}.`);
 
   leagueContext.userRosterId = userRoster.roster_id;
   console.log(`User roster_id=${leagueContext.userRosterId}`);
@@ -274,14 +379,10 @@ async function fetchDynamicData(week, season) {
   const projections = normalizeProjectionsToMap(projectionsRaw || {});
   window.__latestProjections = projections;
 
-  if (!Array.isArray(matchups) || matchups.length === 0) {
-    return { matchupTeams: [], projections };
-  }
+  if (!Array.isArray(matchups) || matchups.length === 0) return { matchupTeams: [], projections };
 
   const userTeamMatchup = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-  if (!userTeamMatchup) {
-    throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
-  }
+  if (!userTeamMatchup) throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
 
   leagueContext.matchupId = userTeamMatchup.matchup_id;
 
@@ -352,7 +453,7 @@ function mergeAndRenderData(data) {
 }
 
 // ------------------------------
-// Starters list rendering (Sleeper for list; raw stats ONLY for headshot + modal)
+// Starters list rendering (Sleeper for list; raw for headshot + modal)
 // ------------------------------
 function getOpponentTextForTeam(teamAbbrev) {
   const entry = scheduleByTeam?.[teamAbbrev];
@@ -363,12 +464,11 @@ function getOpponentTextForTeam(teamAbbrev) {
   return `${ha} ${opp}${status}`.trim();
 }
 
-// Prefer raw headshot (from file) when possible, else fallback to Sleeper (none), else blank
 function getHeadshotUrlForSleeperPlayer(playerObj) {
-  const gsis = playerObj?.gsis_id;
+  if (!playerObj) return "";
+  const gsis = resolveGsisIdForSleeperPlayer(playerObj);
   if (!gsis || !rawStats.loaded || !rawStats.maxWeek) return "";
 
-  // pick the latest available week row for that GSIS id
   for (let w = rawStats.maxWeek; w >= 1; w -= 1) {
     const row = getRawStatRowByGsis(w, gsis);
     if (row?.headshot_url) return String(row.headshot_url);
@@ -406,15 +506,15 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
     const card = document.createElement("div");
     card.className = "player-card";
 
-    // Optional headshot (raw stats)
     let headshot = "";
     if (!isTeamDef && player) headshot = getHeadshotUrlForSleeperPlayer(player);
 
-    // Clickable modal for real players
     if (!isTeamDef) {
       card.setAttribute("role", "button");
       card.setAttribute("tabindex", "0");
+
       const open = () => showPlayerDetailsModal(sleeperPlayerId).catch((e) => console.error("Player modal error:", e));
+
       card.addEventListener("click", open);
       card.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -491,12 +591,6 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
   if (bodyEl) bodyEl.innerHTML = bodyHtml;
 }
 
-function s(obj, key) {
-  const v = obj?.[key];
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 function buildRecentAndExpectedTable(rows, expectedRaw) {
   return `
     <table class="player-table" aria-label="Recent stats + expected">
@@ -556,7 +650,7 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
 
   openPlayerModal();
 
-  const gsis = player?.gsis_id;
+  const gsis = resolveGsisIdForSleeperPlayer(player);
   const maxWeek = Number(rawStats.maxWeek || 0);
 
   if (!gsis || !maxWeek) {
@@ -564,7 +658,7 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
       title: name,
       subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
       actionsHtml: actions,
-      bodyHtml: `<div class="player-muted">Raw stats unavailable (missing gsis_id or raw file not loaded).</div>`,
+      bodyHtml: `<div class="player-muted">Raw stats unavailable (no GSIS match found).</div>`,
     });
     return;
   }
@@ -572,12 +666,10 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
   const currentWeek = Number(DISPLAY_WEEK);
   const weeksToFetch = getLastNWeeksCompleted(currentWeek, 6, maxWeek);
 
-  // Build rows from raw file: weeks[w][gsis_id]
   const rows = [];
   for (const w of weeksToFetch) {
     const row = getRawStatRowByGsis(w, gsis);
-    if (!row) continue;
-    rows.push(row);
+    if (row) rows.push(row);
   }
 
   if (!rows.length) {
@@ -590,11 +682,8 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     return;
   }
 
-  // Weighted expected from last N rows (oldest=1 newest=N)
   const weights = rows.map((_, i) => i + 1);
-
-  const wAvg = (key) =>
-    weightedAvg(rows.map((r, i) => ({ v: s(r, key), w: weights[i] })));
+  const wAvg = (key) => weightedAvg(rows.map((r, i) => ({ v: s(r, key), w: weights[i] })));
 
   const expectedRaw = {
     fantasy_points_ppr: wAvg("fantasy_points_ppr"),
@@ -610,7 +699,6 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     passing_interceptions: wAvg("passing_interceptions"),
   };
 
-  // Headshot inside modal from latest available raw row
   let headshot = "";
   for (let w = maxWeek; w >= 1; w -= 1) {
     const r = getRawStatRowByGsis(w, gsis);
@@ -640,7 +728,6 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
 async function fetchAndRenderData() {
   if (!leagueContext.users || !leagueContext.rosters || !leagueContext.userRosterId) return;
 
-  // Always show Week 16
   const week = DISPLAY_WEEK;
   const season = Number(nflState?.season) || new Date().getFullYear();
 
@@ -685,14 +772,16 @@ async function initializeApp() {
     await getAllPlayers();
     await fetchInitialContext();
 
-    // Load raw stats in background (so headshots appear without first modal open)
+    // Load raw stats early so headshots + GSIS fallback work without first modal open
     loadRawStatsOnce().catch(() => null);
 
     await fetchAndRenderData();
     startLiveUpdate();
   } catch (error) {
     const loadingEl = document.getElementById("loading");
-    if (loadingEl) loadingEl.textContent = `Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`;
+    if (loadingEl) {
+      loadingEl.textContent = `Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`;
+    }
     console.error("Initialization Failed:", error);
   }
 }
