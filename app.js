@@ -19,12 +19,16 @@ let leagueContext = {
   users: null,
   rosters: null,
   userRosterId: null,
-  matchupId: null,
+  matchupId: null, // "my matchup" id for DISPLAY_WEEK
 };
 
 let scheduleByTeam = {}; // { TEAM: { opp: TEAM, homeAway: 'vs'|'@', gameStatus: string, start: string } }
 let updateTimer = null;
 let lastUpdatedTime = null;
+
+// Matchup selector state
+let matchupIndexById = {}; // { [matchup_id]: { matchupId, rosterIds:[a,b], label } }
+let selectedMatchupId = null;
 
 // Raw stats cache (from nflreadpy file)
 let rawStats = {
@@ -33,6 +37,20 @@ let rawStats = {
   maxWeek: 0,
   weeks: {}, // weeks["1"]["00-0023459"] = stats row object
 };
+
+// GSIS fallback index (name/team/pos)
+let rawIndexBuilt = false;
+let rawIndex = {
+  byNameTeamPos: new Map(), // key: normName|TEAM|POS -> gsis
+  byNamePos: new Map(), // key: normName|POS -> gsis
+  byLastInitTeam: new Map(), // key: last|init|TEAM -> gsis
+};
+
+let gsisFallbackCacheBySleeperId = {}; // { sleeper_player_id: gsis_id }
+
+// Modal state
+let modalIsOpen = false;
+let modalLastFocusedEl = null;
 
 // ------------------------------
 // League scoring (your settings)
@@ -43,20 +61,17 @@ const LEAGUE_SCORING = {
     td: 4,
     two_pt: 2,
     int: -1,
-    // 40/50+ pass TD bonuses not computable from weekly totals reliably (needs play-level data)
   },
   rushing: {
     yards_per_point: 10, // +0.1 per yard
     td: 6,
     two_pt: 2,
-    // 40/50+ rush TD bonuses not computable from weekly totals reliably
   },
   receiving: {
     rec: 0.5,
     yards_per_point: 10, // +0.1 per yard
     td: 6,
     two_pt: 2,
-    // 40/50+ rec TD bonuses not computable from weekly totals reliably
   },
   kicking: {
     fg_made_0_19: 3,
@@ -65,12 +80,13 @@ const LEAGUE_SCORING = {
     fg_made_40_49: 4,
     fg_made_50_plus: 5,
     pat_made: 1,
-    // Misses: interpret range-specific values as overrides; remaining misses use base -1
+
     fg_miss_base: -1,
     fg_miss_0_19: -2,
     fg_miss_20_29: -2,
     fg_miss_30_39: -2,
     fg_miss_40_49: -1,
+
     pat_miss: -2,
   },
   misc: {
@@ -113,7 +129,6 @@ function computeLeaguePointsFromRaw(row) {
     pass2pt * LEAGUE_SCORING.passing.two_pt +
     passInt * LEAGUE_SCORING.passing.int;
 
-  // Passing bonuses (yardage)
   if (passYds >= 400) pts += LEAGUE_SCORING.bonus.pass_400_plus;
   else if (passYds >= 300) pts += LEAGUE_SCORING.bonus.pass_300_399;
 
@@ -127,13 +142,11 @@ function computeLeaguePointsFromRaw(row) {
     rushTD * LEAGUE_SCORING.rushing.td +
     rush2pt * LEAGUE_SCORING.rushing.two_pt;
 
-  // Rushing bonuses (yardage)
   if (rushYds >= 200) pts += LEAGUE_SCORING.bonus.rush_200_plus;
   else if (rushYds >= 100) pts += LEAGUE_SCORING.bonus.rush_100_199;
 
   // Receiving
   const rec = n0(row.receptions);
-  const tgt = n0(row.targets); // not scored but displayed
   const recYds = n0(row.receiving_yards);
   const recTD = n0(row.receiving_tds);
   const rec2pt = n0(row.receiving_2pt_conversions);
@@ -144,7 +157,6 @@ function computeLeaguePointsFromRaw(row) {
     recTD * LEAGUE_SCORING.receiving.td +
     rec2pt * LEAGUE_SCORING.receiving.two_pt;
 
-  // Receiving bonuses (yardage)
   if (recYds >= 200) pts += LEAGUE_SCORING.bonus.rec_200_plus;
   else if (recYds >= 100) pts += LEAGUE_SCORING.bonus.rec_100_199;
 
@@ -153,10 +165,8 @@ function computeLeaguePointsFromRaw(row) {
   const fg20 = clampInt(row.fg_made_20_29);
   const fg30 = clampInt(row.fg_made_30_39);
   const fg40 = clampInt(row.fg_made_40_49);
-  const fg50 = Math.max(
-    0,
-    clampInt(row.fg_made) - (fg0 + fg20 + fg30 + fg40)
-  );
+  const fgMadeTotal = clampInt(row.fg_made);
+  const fg50 = Math.max(0, fgMadeTotal - (fg0 + fg20 + fg30 + fg40));
 
   pts +=
     fg0 * LEAGUE_SCORING.kicking.fg_made_0_19 +
@@ -167,17 +177,15 @@ function computeLeaguePointsFromRaw(row) {
 
   const patMade = clampInt(row.pat_made);
   const patMiss = clampInt(row.pat_missed);
-
   pts += patMade * LEAGUE_SCORING.kicking.pat_made;
   pts += patMiss * LEAGUE_SCORING.kicking.pat_miss;
 
-  // FG misses: use bucket misses when available, override base for those
   const miss0 = clampInt(row.fg_missed_0_19);
   const miss20 = clampInt(row.fg_missed_20_29);
   const miss30 = clampInt(row.fg_missed_30_39);
   const miss40 = clampInt(row.fg_missed_40_49);
-
   const totalMiss = clampInt(row.fg_missed);
+
   const bucketed = miss0 + miss20 + miss30 + miss40;
   const remaining = Math.max(0, totalMiss - bucketed);
 
@@ -205,24 +213,22 @@ function computeLeaguePointsFromRaw(row) {
 }
 
 // ------------------------------
-// GSIS fallback index (name/team/pos)
-// ------------------------------
-let rawIndexBuilt = false;
-let rawIndex = {
-  byNameTeamPos: new Map(), // key: normName|TEAM|POS -> gsis
-  byNamePos: new Map(), // key: normName|POS -> gsis
-  byLastInitTeam: new Map(), // key: last|init|TEAM -> gsis
-};
-
-let gsisFallbackCacheBySleeperId = {}; // { sleeper_player_id: gsis_id }
-
-// ------------------------------
 // Utilities
 // ------------------------------
 async function fetchJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`API request failed: ${response.status} for ${url}`);
   return response.json();
+}
+
+async function tryFetchFirst(urls = []) {
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url);
+      if (data && (Array.isArray(data) ? data.length > 0 : Object.keys(data).length > 0)) return data;
+    } catch (_) {}
+  }
+  return null;
 }
 
 function escapeHtml(str) {
@@ -265,7 +271,8 @@ function getLastNWeeksCompleted(currentWeek, n, maxAvailableWeek) {
 }
 
 function weightedAvg(values) {
-  let num = 0, den = 0;
+  let num = 0,
+    den = 0;
   for (const { v, w } of values) {
     const vn = Number(v);
     const wn = Number(w);
@@ -313,7 +320,7 @@ function s(obj, key) {
 }
 
 // ------------------------------
-// Load RAW_STATS_PATH (nflreadpy output)
+// Load raw stats (nflreadpy output)
 // ------------------------------
 async function loadRawStatsOnce() {
   if (rawStats.loaded) return;
@@ -339,9 +346,10 @@ async function loadRawStatsOnce() {
 
     rawStats.maxWeek = Math.max(metaMax, scannedMax, 0);
     rawStats.loaded = true;
+
     console.log(`[rawStats] loaded season=${rawStats.season} maxWeek=${rawStats.maxWeek}`);
   } catch (e) {
-    rawStats.loaded = true; // prevent retry spam
+    rawStats.loaded = true;
     rawStats.season = null;
     rawStats.maxWeek = 0;
     rawStats.weeks = {};
@@ -365,8 +373,7 @@ function buildRawIndexOnce() {
   const maxWeek = Number(rawStats.maxWeek || 0);
   if (!maxWeek) return;
 
-  const candidateWeeks = [];
-  candidateWeeks.push(String(maxWeek));
+  const candidateWeeks = [String(maxWeek)];
   for (let w = maxWeek - 1; w >= 1 && w >= maxWeek - 3; w -= 1) candidateWeeks.push(String(w));
 
   for (const wk of candidateWeeks) {
@@ -382,7 +389,7 @@ function buildRawIndexOnce() {
       if (n && team && pos) rawIndex.byNameTeamPos.set(`${n}|${team}|${pos}`, gsis);
       if (n && pos) rawIndex.byNamePos.set(`${n}|${pos}`, gsis);
 
-      const rawShort = String(row?.player_name || "");
+      const rawShort = String(row?.player_name || ""); // ex: A.Rodgers
       const shortInit = (rawShort.split(".")[0] || "").toLowerCase();
       const shortLastRaw = rawShort.includes(".") ? rawShort.split(".").slice(1).join(".") : "";
       const shortLast = String(shortLastRaw || lastInit(display).last)
@@ -414,14 +421,15 @@ function resolveGsisIdForSleeperPlayer(player) {
   const full = player.full_name || `${player.first_name || ""} ${player.last_name || ""}`.trim();
   const n = normName(full);
 
-  let gsis = rawIndex.byNameTeamPos.get(`${n}|${team}|${pos}`) || "";
-  if (!gsis) gsis = rawIndex.byNamePos.get(`${n}|${pos}`) || "";
+  let gsis = "";
+  if (n && team && pos) gsis = rawIndex.byNameTeamPos.get(`${n}|${team}|${pos}`) || "";
+  if (!gsis && n && pos) gsis = rawIndex.byNamePos.get(`${n}|${pos}`) || "";
 
   if (!gsis) {
     const li = lastInit(full);
     const last = li.last.replace(/[^a-z]/g, "");
     const init = li.init.toLowerCase();
-    gsis = rawIndex.byLastInitTeam.get(`${last}|${init}|${team}`,) || "";
+    if (last && init && team) gsis = rawIndex.byLastInitTeam.get(`${last}|${init}|${team}`) || "";
   }
 
   if (gsis && sleeperPid) gsisFallbackCacheBySleeperId[sleeperPid] = gsis;
@@ -429,7 +437,7 @@ function resolveGsisIdForSleeperPlayer(player) {
 }
 
 // ------------------------------
-// Step 1: NFL state (season/year)
+// Step 1: NFL state
 // ------------------------------
 async function getNFLState() {
   const url = `${API_BASE}/state/nfl`;
@@ -438,7 +446,7 @@ async function getNFLState() {
 }
 
 // ------------------------------
-// Step 2: Players cache (Sleeper)
+// Step 2: Players cache
 // ------------------------------
 async function getAllPlayers() {
   if (Object.keys(playerCache).length > 0) return;
@@ -448,7 +456,7 @@ async function getAllPlayers() {
 }
 
 // ------------------------------
-// Step 3: League context (users/rosters + user roster id)
+// Step 3: League context
 // ------------------------------
 async function fetchInitialContext() {
   const userUrl = `${API_BASE}/user/${USER_USERNAME}`;
@@ -499,7 +507,7 @@ function buildScheduleMapForWeek(schedule, week) {
 
 async function fetchScheduleForSeasonAndWeek(season, week) {
   const regularUrl = `https://api.sleeper.app/schedule/nfl/regular/${season}`;
-  const schedule = await fetchJson(regularUrl).catch(() => null);
+  const schedule = await tryFetchFirst([regularUrl]);
   scheduleByTeam = buildScheduleMapForWeek(schedule, week);
 }
 
@@ -528,6 +536,85 @@ function getProjectedPoints(projObj) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function getRosterById(rosterId) {
+  return leagueContext.rosters?.find((r) => r && r.roster_id === rosterId) || null;
+}
+
+function getUserByRoster(roster) {
+  if (!roster) return null;
+  return leagueContext.users?.find((u) => u && u.user_id === roster.owner_id) || null;
+}
+
+function getDisplayNameForRosterId(rosterId) {
+  const roster = getRosterById(rosterId);
+  const user = getUserByRoster(roster);
+  return roster?.metadata?.team_name || user?.display_name || `Roster ${rosterId}`;
+}
+
+function buildMatchupLabel(rosterIdA, rosterIdB) {
+  const aName = getDisplayNameForRosterId(rosterIdA);
+  const bName = getDisplayNameForRosterId(rosterIdB);
+
+  const aRoster = getRosterById(rosterIdA);
+  const bRoster = getRosterById(rosterIdB);
+
+  const aWins = aRoster?.settings?.wins ?? 0;
+  const aLoss = aRoster?.settings?.losses ?? 0;
+  const aTies = aRoster?.settings?.ties ?? 0;
+  const bWins = bRoster?.settings?.wins ?? 0;
+  const bLoss = bRoster?.settings?.losses ?? 0;
+  const bTies = bRoster?.settings?.ties ?? 0;
+
+  const aRec = `${aWins}-${aLoss}${aTies > 0 ? "-" + aTies : ""}`;
+  const bRec = `${bWins}-${bLoss}${bTies > 0 ? "-" + bTies : ""}`;
+
+  return `${aName} (${aRec}) vs ${bName} (${bRec})`;
+}
+
+function ensureMatchupSelectorWiredOnce() {
+  const sel = document.getElementById("matchup-select");
+  if (!sel || sel.__wired) return;
+  sel.__wired = true;
+
+  sel.addEventListener("change", async (e) => {
+    const val = String(e.target.value || "");
+    selectedMatchupId = val ? Number(val) : null;
+    try {
+      await fetchAndRenderData();
+    } catch (err) {
+      console.error("Matchup change render error:", err);
+    }
+  });
+}
+
+function renderMatchupSelector() {
+  const sel = document.getElementById("matchup-select");
+  const wrap = document.getElementById("matchup-select-wrap");
+  if (!sel || !wrap) return;
+
+  const entries = Object.values(matchupIndexById || {}).sort((a, b) => a.matchupId - b.matchupId);
+  if (!entries.length) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+
+  const desired = Number.isFinite(Number(selectedMatchupId))
+    ? Number(selectedMatchupId)
+    : Number(leagueContext.matchupId);
+
+  sel.innerHTML = entries
+    .map((m) => {
+      const selected = m.matchupId === desired ? "selected" : "";
+      return `<option value="${m.matchupId}" ${selected}>${escapeHtml(m.label)}</option>`;
+    })
+    .join("");
+
+  selectedMatchupId = desired;
+  ensureMatchupSelectorWiredOnce();
+}
+
 async function fetchDynamicData(week, season) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
   const projectionsUrl =
@@ -536,36 +623,70 @@ async function fetchDynamicData(week, season) {
 
   const [matchups, projectionsRaw] = await Promise.all([
     fetchJson(matchupUrl),
-    fetchJson(projectionsUrl).catch(() => null),
+    tryFetchFirst([projectionsUrl]).catch(() => null),
   ]);
 
   const projections = normalizeProjectionsToMap(projectionsRaw || {});
   window.__latestProjections = projections;
 
-  if (!Array.isArray(matchups) || matchups.length === 0) return { matchupTeams: [], projections };
+  if (!Array.isArray(matchups) || matchups.length === 0) {
+    matchupIndexById = {};
+    return { matchupTeams: [], projections };
+  }
 
-  const userTeamMatchup = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-  if (!userTeamMatchup) throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
+  // Group by matchup_id
+  const groups = {};
+  for (const m of matchups) {
+    if (!m || m.matchup_id === null || m.matchup_id === undefined) continue;
+    const mid = Number(m.matchup_id);
+    if (!Number.isFinite(mid) || mid <= 0) continue;
+    if (!groups[mid]) groups[mid] = [];
+    groups[mid].push(m);
+  }
 
-  leagueContext.matchupId = userTeamMatchup.matchup_id;
+  // Identify my matchup (default)
+  const my = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
+  if (!my) throw new Error(`Matchup data for roster_id ${leagueContext.userRosterId} not found in week ${week}.`);
 
-  const currentMatchupTeams = matchups
-    .filter((m) => m && m.matchup_id === leagueContext.matchupId)
+  leagueContext.matchupId = Number(my.matchup_id);
+
+  // Build selector index
+  matchupIndexById = {};
+  for (const [midStr, arr] of Object.entries(groups)) {
+    const arrSorted = arr.slice().sort((a, b) => a.roster_id - b.roster_id);
+    const rosterIds = arrSorted.map((x) => x.roster_id);
+    if (rosterIds.length >= 2) {
+      matchupIndexById[Number(midStr)] = {
+        matchupId: Number(midStr),
+        rosterIds: [rosterIds[0], rosterIds[1]],
+        label: buildMatchupLabel(rosterIds[0], rosterIds[1]),
+      };
+    }
+  }
+
+  const useMatchupId = Number.isFinite(Number(selectedMatchupId))
+    ? Number(selectedMatchupId)
+    : Number(leagueContext.matchupId);
+
+  const currentMatchupTeams = (groups[useMatchupId] || groups[leagueContext.matchupId] || [])
+    .slice()
     .sort((a, b) => a.roster_id - b.roster_id);
 
   return { matchupTeams: currentMatchupTeams, projections };
 }
 
 // ------------------------------
-// Step 6: Merge + Render
+// Merge + Render
 // ------------------------------
 function mergeAndRenderData(data) {
-  if (!data || !Array.isArray(data.matchupTeams)) return;
+  if (!data || !Array.isArray(data.matchupTeams) || data.matchupTeams.length < 2) {
+    console.error("Invalid matchupTeams:", data?.matchupTeams);
+    return;
+  }
 
   const { matchupTeams, projections } = data;
 
-  const teamA = matchupTeams.find((t) => t && t.roster_id === leagueContext.userRosterId);
-  const teamB = matchupTeams.find((t) => t && t.roster_id !== leagueContext.userRosterId);
+  const [teamA, teamB] = matchupTeams;
   if (!teamA || !teamB) throw new Error("Could not identify both teams in the matchup.");
 
   const getTeamDetails = (matchupTeam) => {
@@ -605,6 +726,8 @@ function mergeAndRenderData(data) {
   renderStarters(a.starters, "team-a-starters", a.playersPoints, projections);
   renderStarters(b.starters, "team-b-starters", b.playersPoints, projections);
 
+  renderMatchupSelector();
+
   const scoreboardEl = document.getElementById("scoreboard");
   if (scoreboardEl) scoreboardEl.classList.remove("hidden");
   const loadingEl = document.getElementById("loading");
@@ -616,7 +739,7 @@ function mergeAndRenderData(data) {
 }
 
 // ------------------------------
-// Starters list rendering (Sleeper for list; raw for headshot + modal)
+// Starters list rendering
 // ------------------------------
 function getOpponentTextForTeam(teamAbbrev) {
   const entry = scheduleByTeam?.[teamAbbrev];
@@ -649,7 +772,6 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
   starterIds.forEach((playerIdRaw) => {
     const sleeperPlayerId = String(playerIdRaw);
 
-    // Team DEF often appears as "HOU", "DAL", etc.
     const isTeamDef = /^[A-Z]{2,4}$/.test(sleeperPlayerId) && !playerCache[sleeperPlayerId];
     const player = playerCache[sleeperPlayerId] || playerCache[Number(sleeperPlayerId)] || null;
 
@@ -704,20 +826,21 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
 }
 
 // ------------------------------
-// Player modal helpers
+// Player modal
 // ------------------------------
-let modalIsOpen = false;
-let modalLastFocusedEl = null;
-
-function getEl(id) { return document.getElementById(id); }
+function getEl(id) {
+  return document.getElementById(id);
+}
 
 function openPlayerModal() {
   const backdrop = getEl("player-modal-backdrop");
   if (!backdrop) return;
+
   modalLastFocusedEl = document.activeElement;
   backdrop.classList.add("open");
   backdrop.setAttribute("aria-hidden", "false");
   modalIsOpen = true;
+
   const closeBtn = getEl("player-modal-close");
   if (closeBtn) closeBtn.focus();
 }
@@ -725,22 +848,32 @@ function openPlayerModal() {
 function closePlayerModal() {
   const backdrop = getEl("player-modal-backdrop");
   if (!backdrop) return;
+
   backdrop.classList.remove("open");
   backdrop.setAttribute("aria-hidden", "true");
   modalIsOpen = false;
-  if (modalLastFocusedEl && typeof modalLastFocusedEl.focus === "function") modalLastFocusedEl.focus();
+
+  if (modalLastFocusedEl && typeof modalLastFocusedEl.focus === "function") {
+    modalLastFocusedEl.focus();
+  }
 }
 
 function wirePlayerModalEventsOnce() {
   const backdrop = getEl("player-modal-backdrop");
   const closeBtn = getEl("player-modal-close");
   if (!backdrop || !closeBtn) return;
+
   if (backdrop.__wired) return;
   backdrop.__wired = true;
 
   closeBtn.addEventListener("click", closePlayerModal);
-  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closePlayerModal(); });
-  document.addEventListener("keydown", (e) => { if (modalIsOpen && e.key === "Escape") closePlayerModal(); });
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closePlayerModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!modalIsOpen) return;
+    if (e.key === "Escape") closePlayerModal();
+  });
 }
 
 function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
@@ -748,6 +881,7 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
   const subEl = getEl("player-modal-subtitle");
   const actionsEl = getEl("player-modal-actions");
   const bodyEl = getEl("player-modal-body");
+
   if (titleEl) titleEl.textContent = title;
   if (subEl) subEl.textContent = subtitle;
   if (actionsEl) actionsEl.innerHTML = actionsHtml;
@@ -755,12 +889,12 @@ function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
 }
 
 function buildRecentAndExpectedTable(rows, expectedRowForScoring) {
-  const rowToDisplay = (r) => {
-    const ppr = computeLeaguePointsFromRaw(r);
+  const rowToHtml = (r) => {
+    const pts = computeLeaguePointsFromRaw(r);
     return `
       <tr>
         <td>${escapeHtml(String(r.week ?? ""))}</td>
-        <td>${escapeHtml(formatStatValue(ppr))}</td>
+        <td>${escapeHtml(formatStatValue(pts))}</td>
         <td>${escapeHtml(formatStatValue(r.carries))}-${escapeHtml(formatStatValue(r.rushing_yards))} (${escapeHtml(formatStatValue(r.rushing_tds))} TD)</td>
         <td>${escapeHtml(formatStatValue(r.receptions))}/${escapeHtml(formatStatValue(r.targets))}-${escapeHtml(formatStatValue(r.receiving_yards))} (${escapeHtml(formatStatValue(r.receiving_tds))} TD)</td>
         <td>${escapeHtml(formatStatValue(r.passing_yards))} (${escapeHtml(formatStatValue(r.passing_tds))} TD, ${escapeHtml(formatStatValue(r.passing_interceptions))} INT)</td>
@@ -782,7 +916,7 @@ function buildRecentAndExpectedTable(rows, expectedRowForScoring) {
         </tr>
       </thead>
       <tbody>
-        ${rows.map(rowToDisplay).join("")}
+        ${rows.map(rowToHtml).join("")}
         <tr>
           <td><strong>Expected</strong></td>
           <td><strong>${escapeHtml(formatStatValue(expectedPts))}</strong></td>
@@ -847,12 +981,12 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
       title: name,
       subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
       actionsHtml: actions,
-      bodyHtml: `<div class="player-muted">No raw stats found for this player in weeks ${escapeHtml(String(weeksToFetch[0] || 1))}–${escapeHtml(String(weeksToFetch[weeksToFetch.length - 1] || maxWeek))}.</div>`,
+      bodyHtml: `<div class="player-muted">No raw stats found for this player in the last ${escapeHtml(String(weeksToFetch.length))} completed weeks.</div>`,
     });
     return;
   }
 
-  // Weighted expected row (keep the stat fields needed by computeLeaguePointsFromRaw)
+  // Weighted expected row (fields needed by scoring + display)
   const weights = rows.map((_, i) => i + 1);
   const wAvg = (key) => weightedAvg(rows.map((r, i) => ({ v: s(r, key), w: weights[i] })));
 
@@ -868,12 +1002,14 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     rushing_yards: wAvg("rushing_yards"),
     rushing_tds: wAvg("rushing_tds"),
     rushing_2pt_conversions: wAvg("rushing_2pt_conversions"),
+    rushing_fumbles_lost: wAvg("rushing_fumbles_lost"),
     // receiving
     receptions: wAvg("receptions"),
     targets: wAvg("targets"),
     receiving_yards: wAvg("receiving_yards"),
     receiving_tds: wAvg("receiving_tds"),
     receiving_2pt_conversions: wAvg("receiving_2pt_conversions"),
+    receiving_fumbles_lost: wAvg("receiving_fumbles_lost"),
     // kicking
     fg_made: wAvg("fg_made"),
     fg_made_0_19: wAvg("fg_made_0_19"),
@@ -888,8 +1024,6 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     pat_made: wAvg("pat_made"),
     pat_missed: wAvg("pat_missed"),
     // misc
-    rushing_fumbles_lost: wAvg("rushing_fumbles_lost"),
-    receiving_fumbles_lost: wAvg("receiving_fumbles_lost"),
     sack_fumbles_lost: wAvg("sack_fumbles_lost"),
     fumble_recovery_tds: wAvg("fumble_recovery_tds"),
     special_teams_tds: wAvg("special_teams_tds"),
@@ -898,15 +1032,18 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
   let headshot = "";
   for (let w = maxWeek; w >= 1; w -= 1) {
     const r = getRawStatRowByGsis(w, gsis);
-    if (r?.headshot_url) { headshot = String(r.headshot_url); break; }
+    if (r?.headshot_url) {
+      headshot = String(r.headshot_url);
+      break;
+    }
   }
 
   const headshotHtml = headshot
-    ? `<div style="display:flex;gap:14px;align-items:center;margin-top:6px;margin-bottom:6px;">
+    ? `<div style="display:flex;gap:14px;align-items:center;margin-top:6px;margin-bottom:8px;">
          <img class="player-headshot" src="${escapeHtml(headshot)}" alt="${escapeHtml(name)} headshot" />
          <div class="player-muted">League scoring applied (yardage bonuses included).</div>
        </div>`
-    : `<div class="player-muted" style="margin-top:6px;margin-bottom:6px;">League scoring applied (yardage bonuses included).</div>`;
+    : `<div class="player-muted" style="margin-top:6px;margin-bottom:8px;">League scoring applied (yardage bonuses included).</div>`;
 
   const table = buildRecentAndExpectedTable(rows, expectedRow);
 
@@ -916,7 +1053,7 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     actionsHtml: actions,
     bodyHtml: `${headshotHtml}${table}
       <div class="player-muted" style="margin-top:8px;">
-        Notes: 40+/50+ TD distance bonuses require play-level data and are not computed from weekly totals. Team Defense scoring not shown here.
+        Notes: 40+/50+ TD distance bonuses require play-level data and are not computed from weekly totals. Team Defense scoring not computed here.
       </div>`,
   });
 }
