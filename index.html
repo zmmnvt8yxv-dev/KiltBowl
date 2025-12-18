@@ -1,96 +1,109 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kilt Bowl 2026</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kilt Bowl 2026</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
 
-<body>
-  <div class="container">
-
-    <!-- Banner -->
-    <header class="kiltbowl-banner">
-      <div>
-        <h1>Kilt Bowl 2026</h1>
-        <div class="series-line">Current series: Team conner27lax 1-0 Junction • Best of 3</div>
+  <body>
+    <div class="container">
+      <!-- Top banner -->
+      <div class="titlebar">
+        <div class="titlebar-left">
+          <div class="titlebar-title">Kilt Bowl 2026</div>
+          <div class="titlebar-subtitle">
+            Current series: <span class="pill">Team conner27lax</span> <span class="pill pill-win">1-0</span>
+            <span class="pill">Junction</span>
+            <span class="pill">Best of 3</span>
+          </div>
+        </div>
+        <div class="titlebar-right" aria-hidden="true">
+          <!-- Use any local image you want; keep filename stable -->
+          <img class="kilt-img" src="kilt.png" alt="Kilt" />
+        </div>
       </div>
-    </header>
 
-    <!-- Loading -->
-    <div id="loading">Loading matchup…</div>
+      <div id="loading">Loading matchup…</div>
 
-    <!-- Scoreboard -->
-    <div id="scoreboard" class="hidden">
+      <div id="scoreboard" class="hidden">
+        <div class="header">
+          <div class="team-header">
+            <img id="team-a-avatar" class="team-avatar" alt="Team A Avatar" />
+            <div class="team-info">
+              <h2 id="team-a-name">Team A</h2>
+              <div id="team-a-record" class="team-record"></div>
+            </div>
+          </div>
 
-      <div class="header">
-        <div class="team-header">
-          <img id="team-a-avatar" class="team-avatar" src="" alt="Team A" />
-          <div class="team-info">
-            <h2 id="team-a-name"></h2>
-            <div class="team-record" id="team-a-record"></div>
+          <div class="score-center">
+            <div class="score-display">
+              <span id="score-a">0.00</span>
+            </div>
+            <div class="vs">VS</div>
+            <div class="score-display">
+              <span id="score-b">0.00</span>
+            </div>
+          </div>
+
+          <div class="team-header">
+            <div class="team-info right">
+              <h2 id="team-b-name">Team B</h2>
+              <div id="team-b-record" class="team-record"></div>
+            </div>
+            <img id="team-b-avatar" class="team-avatar" alt="Team B Avatar" />
           </div>
         </div>
 
-        <div class="score-display" id="score-a">0.00</div>
-
-        <div class="vs">VS</div>
-
-        <div class="score-display" id="score-b">0.00</div>
-
-        <div class="team-header">
-          <div class="team-info" style="text-align:right;">
-            <h2 id="team-b-name"></h2>
-            <div class="team-record" id="team-b-record"></div>
+        <div class="matchup-container">
+          <div class="team-column">
+            <h3>Starters</h3>
+            <div id="team-a-starters"></div>
           </div>
-          <img id="team-b-avatar" class="team-avatar" src="" alt="Team B" />
-        </div>
-      </div>
 
-      <div class="matchup-container">
-        <div class="team-column">
-          <h3>Your Starters</h3>
-          <div id="team-a-starters"></div>
+          <div class="team-column">
+            <h3>Starters</h3>
+            <div id="team-b-starters"></div>
+          </div>
         </div>
 
-        <div class="team-column">
-          <h3>Opponent Starters</h3>
-          <div id="team-b-starters"></div>
-        </div>
-      </div>
-
-      <div class="footer">
-        <div class="update-info">
-          <span>Last Updated: <strong id="last-updated">--:--:--</strong></span>
-          <span>Next Update: <strong id="countdown">30</strong>s</span>
+        <div class="footer">
+          <div class="update-info">
+            <div>Last updated: <span id="last-updated">—</span></div>
+            <div>Refresh in: <span id="countdown">—</span>s</div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Player Modal -->
-  <div id="player-modal-backdrop" class="modal-backdrop" aria-hidden="true">
-    <div class="player-modal" role="dialog" aria-modal="true" aria-labelledby="player-modal-title">
-
-      <div class="player-modal-header">
-        <div class="player-modal-title">
-          <h2 id="player-modal-title"></h2>
-          <div id="player-modal-subtitle" class="player-modal-subtitle"></div>
-          <div id="player-modal-actions" class="player-modal-actions"></div>
+    <!-- Player Modal -->
+    <div
+      id="player-modal-backdrop"
+      class="player-modal-backdrop"
+      aria-hidden="true"
+    >
+      <div
+        class="player-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="player-modal-title"
+      >
+        <div class="player-modal-header">
+          <div class="player-modal-titlewrap">
+            <div id="player-modal-title" class="player-modal-title">Player</div>
+            <div id="player-modal-subtitle" class="player-modal-subtitle"></div>
+          </div>
+          <button id="player-modal-close" class="player-modal-close" type="button" aria-label="Close">
+            ✕
+          </button>
         </div>
 
-        <button id="player-modal-close" class="player-modal-close" type="button" aria-label="Close">
-          Close
-        </button>
-      </div>
-
-      <div id="player-modal-body" class="player-modal-body">
-        <div class="player-loading">Loading player data…</div>
+        <div id="player-modal-actions" class="player-modal-actions"></div>
+        <div id="player-modal-body" class="player-modal-body"></div>
       </div>
     </div>
-  </div>
 
-  <script src="app.js"></script>
-</body>
+    <script src="app.js"></script>
+  </body>
 </html>
