@@ -1,230 +1,349 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KiltBowl - Sleeper Fantasy Scoreboard</title>
-    <link rel="stylesheet" href="style.css">
-    <style>
-      .kiltbowl-banner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 14px 16px;
-        margin: 0 0 16px 0;
-        border: 2px solid rgba(255, 255, 255, 0.15);
-        border-radius: 14px;
-        background: rgba(0, 0, 0, 0.25);
-        backdrop-filter: blur(6px);
-      }
+let scheduleByTeam = {}; // { TEAM: { opp: TEAM, homeAway: 'vs'|'@', gameStatus: string, start: string } }
+let updateTimer = null;
+let lastUpdatedTime = null;
 
-      .kiltbowl-banner h1 {
-        margin: 0;
-        font-size: 28px;
-        letter-spacing: 0.5px;
-        line-height: 1.1;
-      }
+// Weekly stats cache: { [weekNumber]: statsPayload }
+let statsCacheByWeek = {};
 
-      .kiltbowl-banner .series-line {
-        margin-top: 6px;
-        font-size: 14px;
-        opacity: 0.9;
-        line-height: 1.3;
-      }
+// Modal state
+let modalIsOpen = false;
+let modalLastFocusedEl = null;
 
-      .kiltbowl-kilt {
-        width: 68px;
-        height: 68px;
-        flex: 0 0 auto;
-      }
+function setImgSrc(id, src) {
+  const el = document.getElementById(id);
+  if (el && el.tagName === "IMG") el.src = src;
+}
 
-      .kiltbowl-kilt .stroke { stroke: currentColor; }
-      .kiltbowl-kilt .fill { fill: currentColor; }
+// ------------------------------
+// Player modal helpers
+// ------------------------------
+function getEl(id) {
+  return document.getElementById(id);
+}
 
-      /* ------------------------------
-         Mobile responsiveness
-         ------------------------------ */
-      @media (max-width: 640px) {
-        .container {
-          padding: 12px;
-        }
+function openPlayerModal() {
+  const backdrop = getEl("player-modal-backdrop");
+  if (!backdrop) return;
 
-        .kiltbowl-banner {
-          flex-direction: column;
-          align-items: flex-start;
-          gap: 10px;
-          padding: 12px;
-        }
+  modalLastFocusedEl = document.activeElement;
+  backdrop.classList.add("open");
+  backdrop.setAttribute("aria-hidden", "false");
+  modalIsOpen = true;
 
-        .kiltbowl-banner h1 {
-          font-size: 22px;
-        }
+  const closeBtn = getEl("player-modal-close");
+  if (closeBtn) closeBtn.focus();
+}
 
-        .kiltbowl-banner .series-line {
-          font-size: 13px;
-        }
+function closePlayerModal() {
+  const backdrop = getEl("player-modal-backdrop");
+  if (!backdrop) return;
 
-        .kiltbowl-kilt {
-          width: 56px;
-          height: 56px;
-          align-self: flex-end;
-        }
+  backdrop.classList.remove("open");
+  backdrop.setAttribute("aria-hidden", "true");
+  modalIsOpen = false;
 
-        /* Scoreboard header stacks nicely */
-        .header {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 12px;
-          align-items: center;
-        }
+  if (modalLastFocusedEl && typeof modalLastFocusedEl.focus === "function") {
+    modalLastFocusedEl.focus();
+  }
+}
 
-        .team-header {
-          justify-content: space-between;
-        }
+function wirePlayerModalEventsOnce() {
+  const backdrop = getEl("player-modal-backdrop");
+  const closeBtn = getEl("player-modal-close");
+  if (!backdrop || !closeBtn) return;
 
-        .team-avatar {
-          width: 42px;
-          height: 42px;
-        }
+  if (backdrop.__wired) return;
+  backdrop.__wired = true;
 
-        .score-display {
-          font-size: 34px;
-          line-height: 1;
-        }
+  closeBtn.addEventListener("click", closePlayerModal);
 
-        .vs {
-          text-align: center;
-          margin: -6px 0;
-          opacity: 0.85;
-        }
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closePlayerModal();
+  });
 
-        /* Starters columns become single column */
-        .matchup-container {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 14px;
-        }
+  document.addEventListener("keydown", (e) => {
+    if (!modalIsOpen) return;
+    if (e.key === "Escape") closePlayerModal();
+  });
+}
 
-        .team-column h3 {
-          margin-top: 0;
-        }
+function safeText(v) {
+  return v === undefined || v === null ? "" : String(v);
+}
 
-        /* Player cards wrap and tighten */
-        .player-card {
-          gap: 10px;
-          padding: 10px 12px;
-        }
+function buildEspnPlayerUrl(playerObj) {
+  const espnId = playerObj?.espn_id ?? playerObj?.espnId;
+  if (!espnId) return "";
+  return `https://www.espn.com/nfl/player/_/id/${encodeURIComponent(String(espnId))}`;
+}
 
-        .player-name {
-          font-size: 14px;
-        }
+async function fetchStatsForWeekCached(season, week) {
+  const w = Number(week);
+  if (statsCacheByWeek[w]) return statsCacheByWeek[w];
 
-        .player-details {
-          font-size: 12px;
-        }
+  const url = `${API_BASE}/stats/nfl/${season}/${w}`;
+  const data = await tryFetchFirst([url]);
+  statsCacheByWeek[w] = data || null;
+  return statsCacheByWeek[w];
+}
 
-        .score-box {
-          min-width: 84px;
-        }
+function getPlayerStatsFromWeekPayload(weekPayload, playerId) {
+  if (!weekPayload) return null;
+  const pid = String(playerId);
 
-        .footer .update-info {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 6px;
-          text-align: left;
-        }
-      }
+  if (typeof weekPayload === "object" && !Array.isArray(weekPayload)) {
+    if (weekPayload[pid]) return weekPayload[pid];
+    if (weekPayload[String(Number(pid))]) return weekPayload[String(Number(pid))];
 
-      /* Ultra-small screens */
-      @media (max-width: 380px) {
-        .kiltbowl-banner h1 {
-          font-size: 20px;
-        }
+    const nested = weekPayload.data || weekPayload.stats || null;
+    if (nested) return getPlayerStatsFromWeekPayload(nested, pid);
+  }
 
-        .score-display {
-          font-size: 30px;
-        }
+  if (Array.isArray(weekPayload)) {
+    const row = weekPayload.find((r) => String(r?.player_id ?? r?.playerId ?? r?.id) === pid);
+    if (!row) return null;
+    return row?.stats ? row.stats : row;
+  }
 
-        .team-avatar {
-          width: 38px;
-          height: 38px;
-        }
-      }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="kiltbowl-banner" aria-label="Kilt Bowl header">
-            <div>
-                <h1>Kilt Bowl 2026</h1>
-                <div class="series-line">Current series: Team conner27lax 1-0 Junction • Best of 3</div>
-            </div>
+  return null;
+}
 
-            <svg class="kiltbowl-kilt" viewBox="0 0 128 128" role="img" aria-label="Kilt icon" xmlns="http://www.w3.org/2000/svg">
-                <path class="stroke" d="M38 18h52l6 26c-7 6-16 9-32 9s-25-3-32-9l6-26z" fill="none" stroke-width="4" stroke-linejoin="round"/>
-                <path class="stroke" d="M32 44c10 9 22 13 32 13s22-4 32-13l10 66c-10 7-25 12-42 12s-32-5-42-12l10-66z" fill="none" stroke-width="4" stroke-linejoin="round"/>
-                <path class="stroke" d="M48 58v54" fill="none" stroke-width="3" stroke-linecap="round"/>
-                <path class="stroke" d="M64 60v58" fill="none" stroke-width="3" stroke-linecap="round"/>
-                <path class="stroke" d="M80 58v54" fill="none" stroke-width="3" stroke-linecap="round"/>
-                <path class="stroke" d="M40 72h48" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
-                <path class="stroke" d="M38 88h52" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
-            </svg>
-        </div>
+function formatStatValue(v) {
+  if (v === undefined || v === null) return "—";
+  const n = Number(v);
+  if (Number.isFinite(n)) return Math.abs(n % 1) < 1e-9 ? String(n) : n.toFixed(2);
+  return String(v);
+}
 
-        <div id="loading">Loading scoreboard data...</div>
-        
-        <div id="scoreboard" class="hidden">
-            <div class="header">
-                <div class="team-header">
-                    <img id="team-a-avatar" class="team-avatar" src="" alt="Team A">
-                    <div class="team-info">
-                        <h2 id="team-a-name">Team A</h2>
-                        <div class="team-record" id="team-a-record">0-0</div>
-                    </div>
-                </div>
-                
-                <div style="text-align: center;">
-                    <div class="score-display" id="score-a">0.00</div>
-                </div>
-                
-                <div class="vs">VS</div>
-                
-                <div style="text-align: center;">
-                    <div class="score-display" id="score-b">0.00</div>
-                </div>
-                
-                <div class="team-header">
-                    <div class="team-info" style="text-align: right;">
-                        <h2 id="team-b-name">Team B</h2>
-                        <div class="team-record" id="team-b-record">0-0</div>
-                    </div>
-                    <img id="team-b-avatar" class="team-avatar" src="" alt="Team B">
-                    <div class="error-placeholder hidden">Data unavailable or failed to load.</div>
-                </div>
-            </div>
+function pickRelevantStats(position, statsObj) {
+  const keysCommon = [
+    ["pts_ppr", "PPR Pts"],
+    ["pts_half_ppr", "Half PPR"],
+    ["pts_std", "Std Pts"],
+  ];
 
-            <div class="matchup-container">
-                <div class="team-column">
-                    <h3>Your Starters</h3>
-                    <div id="team-a-starters"></div>
-                </div>
-                
-                <div class="team-column">
-                    <h3>Opponent Starters</h3>
-                    <div id="team-b-starters"></div>
-                </div>
-            </div>
+  const qb = [
+    ["pass_att", "Pass Att"],
+    ["pass_cmp", "Pass Cmp"],
+    ["pass_yd", "Pass Yds"],
+    ["pass_td", "Pass TD"],
+    ["pass_int", "INT"],
+    ["rush_att", "Rush Att"],
+    ["rush_yd", "Rush Yds"],
+    ["rush_td", "Rush TD"],
+  ];
 
-            <div class="footer">
-                <div class="update-info">
-                    <span>Last Updated: <strong id="last-updated">--:--:--</strong></span>
-                    <span>Next Update: <strong id="countdown">30</strong>s</span>
-                </div>
-            </div>
-        </div>
+  const rbwrte = [
+    ["rush_att", "Rush Att"],
+    ["rush_yd", "Rush Yds"],
+    ["rush_td", "Rush TD"],
+    ["rec", "Rec"],
+    ["rec_tgt", "Targets"],
+    ["rec_yd", "Rec Yds"],
+    ["rec_td", "Rec TD"],
+    ["fum_lost", "Fum Lost"],
+  ];
+
+  const k = [
+    ["fgm", "FG Made"],
+    ["fga", "FG Att"],
+    ["xpm", "XP Made"],
+    ["xpa", "XP Att"],
+  ];
+
+  const def = [
+    ["def_sack", "Sacks"],
+    ["def_int", "INT"],
+    ["def_fum_rec", "Fum Rec"],
+    ["def_td", "Def TD"],
+    ["def_pts_allow", "Pts Allowed"],
+  ];
+
+  const pos = String(position || "").toUpperCase();
+  let list = keysCommon;
+  if (pos === "QB") list = [...keysCommon, ...qb];
+  else if (pos === "K") list = [...keysCommon, ...k];
+  else if (pos === "DEF") list = [...keysCommon, ...def];
+  else list = [...keysCommon, ...rbwrte];
+
+  const rows = [];
+  for (const [k1, label] of list) {
+    if (statsObj && Object.prototype.hasOwnProperty.call(statsObj, k1)) {
+      rows.push([label, formatStatValue(statsObj[k1])]);
+    }
+  }
+  return rows.length ? rows : [["Stats", "No data"]];
+}
+
+function renderPlayerModalContent({ title, subtitle, actionsHtml, bodyHtml }) {
+  const titleEl = getEl("player-modal-title");
+  const subEl = getEl("player-modal-subtitle");
+  const actionsEl = getEl("player-modal-actions");
+  const bodyEl = getEl("player-modal-body");
+
+  if (titleEl) titleEl.textContent = title;
+  if (subEl) subEl.textContent = subtitle;
+  if (actionsEl) actionsEl.innerHTML = actionsHtml;
+  if (bodyEl) bodyEl.innerHTML = bodyHtml;
+}
+
+async function showPlayerDetailsModal(playerId) {
+  wirePlayerModalEventsOnce();
+
+  const player = playerCache[String(playerId)] || playerCache[Number(playerId)] || null;
+  if (!player) return;
+
+  const position = String(player?.position || "").toUpperCase();
+  const team = safeText(player?.team || "");
+  const name = safeText(player?.full_name || (player?.first_name ? `${player.first_name} ${player.last_name}` : "Player"));
+
+  const espnUrl = buildEspnPlayerUrl(player);
+  const actions = espnUrl
+    ? `<a href="${espnUrl}" target="_blank" rel="noopener noreferrer">Open ESPN player page</a>`
+    : `<span class="player-muted">ESPN link unavailable (no espn_id)</span>`;
+
+  renderPlayerModalContent({
+    title: name,
+    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
+    actionsHtml: actions,
+    bodyHtml: `<div class="player-loading">Loading stats, game log, and projections…</div>`,
+  });
+
+  openPlayerModal();
+
+  const season = Number(nflState?.season) || new Date().getFullYear();
+  const currentWeek = Number(DISPLAY_WEEK);
+
+  const weeksToFetch = [];
+  for (let w = Math.max(1, currentWeek - 5); w <= Math.max(1, currentWeek - 1); w += 1) {
+    weeksToFetch.push(w);
+  }
+
+  const weekPayloads = [];
+  for (const w of weeksToFetch) {
+    try {
+      const payload = await fetchStatsForWeekCached(season, w);
+      weekPayloads.push({ week: w, payload });
+    } catch (_) {
+      weekPayloads.push({ week: w, payload: null });
+    }
+  }
+
+  const gameLogRows = [];
+  const seasonAgg = {};
+
+  for (const { week, payload } of weekPayloads) {
+    const statsObj = getPlayerStatsFromWeekPayload(payload, playerId);
+    if (!statsObj) {
+      gameLogRows.push({ week, pts: "—", note: "No data" });
+      continue;
+    }
+
+    const pts = statsObj?.pts_ppr ?? statsObj?.fantasy_points ?? statsObj?.points;
+    gameLogRows.push({ week, pts: formatStatValue(pts), note: "" });
+
+    for (const [k, v] of Object.entries(statsObj)) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) continue;
+      seasonAgg[k] = (Number(seasonAgg[k]) || 0) + n;
+    }
+  }
+
+  const latestProjections = window.__latestProjections || {};
+  const projObj = latestProjections?.[String(playerId)] || latestProjections?.[Number(playerId)] || null;
+  const projPts = getProjectedPoints(projObj);
+
+  const seasonRows = pickRelevantStats(position, seasonAgg);
+
+  const gameLogTable = `
+    <table class="player-table" aria-label="Game log">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>PPR Pts</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${gameLogRows
+          .map((r) => `<tr><td>${r.week}</td><td>${escapeHtml(r.pts)}</td><td class="player-muted">${escapeHtml(r.note || "")}</td></tr>`)
+          .join("")}
+      </tbody>
+    </table>
+  `;
+
+  const seasonTable = `
+    <div class="player-kv" aria-label="Season totals (recent weeks aggregated)">
+      ${seasonRows.map(([k, v]) => `<div class="k">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`).join("")}
     </div>
+  `;
 
-    <script src="app.js"></script>
-</body>
-</html>
+  const projPanel = `
+    <div class="player-kv" aria-label="Projection">
+      <div class="k">Projected (PPR)</div><div>${escapeHtml(formatStatValue(projPts))}</div>
+      <div class="k">Week</div><div>${escapeHtml(String(currentWeek))}</div>
+    </div>
+  `;
+
+  const body = `
+    <div class="player-modal-grid">
+      <div class="player-panel">
+        <h3>Projection</h3>
+        ${projPanel}
+        <div class="player-muted" style="margin-top:8px;">Projection comes from Sleeper projections endpoint for Week ${escapeHtml(String(currentWeek))}.</div>
+      </div>
+      <div class="player-panel">
+        <h3>Season totals</h3>
+        ${seasonTable}
+        <div class="player-muted" style="margin-top:8px;">Totals are aggregated from the last 5 completed weeks prior to Week ${escapeHtml(String(currentWeek))}.</div>
+      </div>
+      <div class="player-panel" style="grid-column: 1 / -1;">
+        <h3>Recent game log</h3>
+        ${gameLogTable}
+      </div>
+    </div>
+  `;
+
+  renderPlayerModalContent({
+    title: name,
+    subtitle: `${team ? team + " • " : ""}${position || ""}`.trim(),
+    actionsHtml: actions,
+    bodyHtml: body,
+  });
+}
+
+  // Inside fetchDynamicData(week, season) function, after:
+  // const projections = normalizeProjectionsToMap(projectionsRaw || {});
+  // Insert:
+  // window.__latestProjections = projections;
+
+  // Inside renderStarters(...) function, replace:
+  // const card = document.createElement("div");
+  // card.className = "player-card";
+  // With:
+  // const card = document.createElement("div");
+  // card.className = "player-card";
+  //
+  // // Make cards tappable/clickable to open modal
+  // card.setAttribute("role", "button");
+  // card.setAttribute("tabindex", "0");
+  // card.dataset.playerId = playerId;
+
+  // Inside renderStarters(...) function, before:
+  // container.appendChild(card);
+  // Insert:
+  //
+  // // Only show modal for real players (skip team DEF tokens like "HOU")
+  // if (!isTeamDef) {
+  //   const open = () => {
+  //     showPlayerDetailsModal(playerId).catch((e) => console.error("Player modal error:", e));
+  //   };
+  //
+  //   card.addEventListener("click", open);
+  //   card.addEventListener("keydown", (e) => {
+  //     if (e.key === "Enter" || e.key === " ") {
+  //       e.preventDefault();
+  //       open();
+  //     }
+  //   });
+  // }
