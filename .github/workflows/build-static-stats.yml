@@ -1,0 +1,77 @@
+name: Build Static Sleeper Stats
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs every Tuesday at 10:00 UTC (after MNF stats settle)
+    - cron: "0 10 * * 2"
+
+jobs:
+  build-stats:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch current NFL week and season
+        id: nfl
+        run: |
+          curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
+          echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
+          echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
+
+      - name: Build stats-static.yml
+        run: |
+          node <<'EOF'
+          import fs from "fs";
+          import yaml from "js-yaml";
+
+          const season = Number(process.env.SEASON);
+          const currentWeek = Number(process.env.WEEK);
+          const lastCompletedWeek = Math.max(0, currentWeek - 1);
+
+          async function fetchJson(url) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          }
+
+          const weeks = {};
+
+          for (let w = 1; w <= lastCompletedWeek; w++) {
+            const url = `https://api.sleeper.app/v1/stats/nfl/${season}/${w}`;
+            try {
+              const data = await fetchJson(url);
+              weeks[String(w)] = data || null;
+              console.log(`Week ${w}: OK`);
+            } catch (e) {
+              weeks[String(w)] = null;
+              console.log(`Week ${w}: FAILED`);
+            }
+          }
+
+          const output = {
+            season,
+            generated_at: new Date().toISOString(),
+            weeks
+          };
+
+          fs.writeFileSync(
+            "stats-static.yml",
+            yaml.dump(output, { lineWidth: 120 })
+          );
+          EOF
+
+      - name: Commit stats-static.yml
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add stats-static.yml
+          git commit -m "Update static Sleeper stats (week ${WEEK})" || echo "No changes"
+          git push
