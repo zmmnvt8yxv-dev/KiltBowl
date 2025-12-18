@@ -1,6 +1,3 @@
-/* ------------------------------
-   Global reset
------------------------------- */
 * {
   margin: 0;
   padding: 0;
@@ -13,15 +10,13 @@ img {
   display: block;
 }
 
-/* ------------------------------
-   Base layout
------------------------------- */
+/* Page */
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   min-height: 100vh;
-  padding: 16px;
-  color: #222;
+  padding: 20px;
+  color: #111;
 }
 
 .container {
@@ -29,314 +24,416 @@ body {
   margin: 0 auto;
 }
 
-/* ------------------------------
-   Title bar
------------------------------- */
-.titlebar {
-  background: white;
-  border-radius: 14px;
-  padding: 16px 20px;
-  margin-bottom: 16px;
+/* Top bar */
+.topbar {
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.25);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 16px 18px;
   display: flex;
-  justify-content: space-between;
+  gap: 14px;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
 }
 
-.titlebar-title {
-  font-size: 24px;
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.event-title {
+  font-size: 28px;
   font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.2px;
+  line-height: 1.1;
 }
 
-.titlebar-subtitle {
-  margin-top: 6px;
-  font-size: 14px;
-  color: #555;
-}
-
-.pill {
-  background: #eee;
-  padding: 3px 8px;
-  border-radius: 999px;
-  margin-right: 6px;
-  font-size: 12px;
-}
-
-.pill-win {
-  background: #667eea;
-  color: white;
-}
-
-.kilt-img {
-  width: 48px;
-  height: 48px;
+.kilt-icon {
+  width: 34px;
+  height: 34px;
   object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.15);
+  padding: 6px;
 }
 
-/* ------------------------------
-   Loading
------------------------------- */
-#loading {
+.series-line {
+  margin-top: 6px;
+  color: rgba(255,255,255,0.92);
+  font-size: 14px;
+}
+
+.meta {
+  text-align: right;
+  color: rgba(255,255,255,0.92);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.meta-row span {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading */
+.loading {
   text-align: center;
-  color: white;
+  color: #fff;
   font-size: 20px;
-  margin-top: 80px;
+  padding: 30px 12px;
 }
 
-/* ------------------------------
-   Scoreboard
------------------------------- */
-#scoreboard {
+/* Scoreboard card */
+.hidden { display: none; }
+
+.scoreboard {
   background: white;
   border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.30);
 }
 
-.hidden {
-  display: none;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
+.scoreboard-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
   align-items: center;
-  margin-bottom: 24px;
-  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #eaeaea;
 }
 
 .team-header {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
-/* 🔒 TEAM AVATARS FIXED */
+.team-right {
+  justify-content: flex-end;
+}
+
+.team-text {
+  min-width: 0;
+}
+
+.team-right-text {
+  text-align: right;
+}
+
 .team-avatar {
   width: 56px;
   height: 56px;
-  border-radius: 50%;
-  object-fit: cover;
+  border-radius: 999px;
   border: 3px solid #667eea;
+  object-fit: cover;
+  background: #f2f3ff;
 }
 
-.team-info h2 {
+.team-name {
   font-size: 20px;
+  font-weight: 800;
+  color: #222;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .team-record {
   font-size: 13px;
   color: #666;
+  margin-top: 4px;
 }
 
 .score-center {
-  text-align: center;
+  display: flex;
+  justify-content: center;
 }
 
 .score-display {
-  font-size: 40px;
-  font-weight: 800;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
   color: #667eea;
+  font-size: 44px;
 }
 
 .vs {
-  font-size: 18px;
+  font-size: 22px;
   color: #999;
+  font-weight: 800;
 }
 
-/* ------------------------------
-   Matchup grid
------------------------------- */
+/* Starters columns */
 .matchup-container {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 18px;
 }
 
 .team-column h3 {
+  font-size: 16px;
+  margin-bottom: 10px;
+  color: #333;
   text-align: center;
-  margin-bottom: 12px;
 }
 
-/* ------------------------------
-   Player cards
------------------------------- */
+.starters {
+  padding-top: 6px;
+}
+
+/* Player cards */
 .player-card {
   background: #f8f9fa;
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  border-radius: 12px;
+  padding: 12px 12px;
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
   gap: 10px;
+  justify-content: space-between;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.player-card[role="button"] {
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
 }
 
 .player-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.10);
 }
 
-/* 🔒 PLAYER HEADSHOT FIXED */
-.player-headshot {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  background: #ddd;
+.player-card:focus {
+  outline: 3px solid rgba(102,126,234,0.35);
+  outline-offset: 2px;
+}
+
+/* Critical: force headshots to stay small, always */
+.player-card .player-headshot {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 999px;
+  object-fit: cover !important;
+  flex: 0 0 42px;
+  background: #e9ecff;
 }
 
 .player-info {
   flex: 1;
+  min-width: 0;
 }
 
 .player-name {
-  font-weight: 600;
-  font-size: 14px;
+  font-weight: 800;
+  font-size: 15px;
+  color: #222;
+  display: block;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .player-details {
   font-size: 12px;
   color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .score-box {
   text-align: right;
+  flex: 0 0 auto;
 }
 
 .score-actual {
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 900;
   color: #667eea;
+  font-variant-numeric: tabular-nums;
 }
 
 .score-projected {
   font-size: 11px;
-  color: #888;
+  color: #999;
+  margin-top: 2px;
 }
 
-/* ------------------------------
-   Footer
------------------------------- */
+/* Footer */
 .footer {
-  margin-top: 16px;
+  margin-top: 10px;
   text-align: center;
-  font-size: 13px;
-  color: #555;
 }
 
-/* ------------------------------
-   Player modal
------------------------------- */
-.player-modal-backdrop {
+.footer-muted {
+  color: #777;
+  font-size: 13px;
+}
+
+/* Modal */
+.modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0,0,0,0.55);
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  padding: 18px;
+  z-index: 9999;
 }
 
-.player-modal-backdrop.open {
+.modal-backdrop.open {
   display: flex;
 }
 
-.player-modal {
+.modal {
+  width: min(980px, 100%);
+  max-height: min(86vh, 860px);
   background: #111;
-  color: #f2f2f2;
-  width: min(960px, 95vw);
-  max-height: 90vh;
-  overflow-y: auto;
-  border-radius: 14px;
-  padding: 20px;
-}
-
-.player-modal-header {
+  color: #fff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.45);
   display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  padding: 16px 16px 12px 16px;
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
 }
 
-/* 🔒 MODAL HEADSHOT FIXED */
-.player-modal img {
-  max-width: 120px;
-  max-height: 120px;
-  object-fit: cover;
-  border-radius: 50%;
+.modal-title {
+  font-size: 24px;
+  font-weight: 900;
 }
 
-.player-modal-title {
-  font-size: 22px;
+.modal-subtitle {
+  margin-top: 4px;
+  color: rgba(255,255,255,0.75);
+  font-size: 13px;
+}
+
+.modal-close {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  padding: 10px 14px;
+  border-radius: 12px;
   font-weight: 800;
-}
-
-.player-modal-subtitle {
-  font-size: 14px;
-  color: #bbb;
-}
-
-.player-modal-close {
-  background: none;
-  border: none;
-  color: white;
-  font-size: 22px;
   cursor: pointer;
 }
 
-.player-modal-actions {
-  margin: 12px 0;
+.modal-actions {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
 }
 
-.player-modal-actions a {
-  color: #7aa2ff;
+.modal-actions a {
+  display: inline-block;
+  background: rgba(255,255,255,0.12);
+  color: #fff;
   text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  font-weight: 800;
 }
 
-.player-modal-body {
-  margin-top: 16px;
+.modal-body {
+  padding: 14px 16px 18px 16px;
+  overflow: auto;
 }
 
-/* ------------------------------
-   Tables
------------------------------- */
+/* Modal content helpers */
+.player-muted {
+  color: rgba(255,255,255,0.72);
+}
+
 .player-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  margin-top: 10px;
 }
 
 .player-table th,
 .player-table td {
-  padding: 8px;
-  border-bottom: 1px solid #333;
-  text-align: center;
+  text-align: left;
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+  vertical-align: top;
 }
 
 .player-table th {
-  color: #ddd;
-  font-weight: 600;
+  color: rgba(255,255,255,0.80);
+  font-weight: 900;
 }
 
-.player-muted {
-  color: #aaa;
-  font-size: 12px;
+.player-table td {
+  color: rgba(255,255,255,0.95);
+  font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------
-   Responsive
------------------------------- */
-@media (max-width: 768px) {
-  .header {
-    flex-direction: column;
+/* Ensure the modal headshot never explodes */
+.modal .player-headshot {
+  width: 120px !important;
+  height: 120px !important;
+  object-fit: cover !important;
+  border-radius: 999px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .scoreboard-header {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    text-align: center;
   }
+
+  .team-header,
+  .team-right {
+    justify-content: center;
+  }
+
+  .team-right-text { text-align: center; }
 
   .matchup-container {
     grid-template-columns: 1fr;
   }
 
   .score-display {
-    font-size: 32px;
+    font-size: 34px;
   }
+}
+
+@media (max-width: 480px) {
+  body { padding: 14px; }
+
+  .event-title { font-size: 22px; }
+
+  .score-display { font-size: 30px; }
+
+  .team-avatar { width: 50px; height: 50px; }
+
+  .player-card { padding: 10px; }
+  .player-card .player-headshot {
+    width: 38px !important;
+    height: 38px !important;
+    flex: 0 0 38px;
+  }
+
+  .score-actual { font-size: 18px; }
 }
