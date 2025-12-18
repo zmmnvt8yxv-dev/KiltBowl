@@ -1,109 +1,102 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Kilt Bowl 2026</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Kilt Bowl 2026</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
 
-  <body>
-    <div class="container">
-      <!-- Top banner -->
-      <div class="titlebar">
-        <div class="titlebar-left">
-          <div class="titlebar-title">Kilt Bowl 2026</div>
-          <div class="titlebar-subtitle">
-            Current series: <span class="pill">Team conner27lax</span> <span class="pill pill-win">1-0</span>
-            <span class="pill">Junction</span>
-            <span class="pill">Best of 3</span>
-          </div>
+<body>
+  <div class="container">
+    <!-- Top banner -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="title-row">
+          <h1 class="event-title">Kilt Bowl 2026</h1>
+          <img class="kilt-icon" src="kilt.png" alt="Kilt" onerror="this.style.display='none';" />
         </div>
-        <div class="titlebar-right" aria-hidden="true">
-          <!-- Use any local image you want; keep filename stable -->
-          <img class="kilt-img" src="kilt.png" alt="Kilt" />
+        <div class="series-line">
+          Current series: <strong>Team conner27lax</strong> 1–0 <strong>Junction</strong> • Best of 3
         </div>
       </div>
 
-      <div id="loading">Loading matchup…</div>
-
-      <div id="scoreboard" class="hidden">
-        <div class="header">
-          <div class="team-header">
-            <img id="team-a-avatar" class="team-avatar" alt="Team A Avatar" />
-            <div class="team-info">
-              <h2 id="team-a-name">Team A</h2>
-              <div id="team-a-record" class="team-record"></div>
-            </div>
-          </div>
-
-          <div class="score-center">
-            <div class="score-display">
-              <span id="score-a">0.00</span>
-            </div>
-            <div class="vs">VS</div>
-            <div class="score-display">
-              <span id="score-b">0.00</span>
-            </div>
-          </div>
-
-          <div class="team-header">
-            <div class="team-info right">
-              <h2 id="team-b-name">Team B</h2>
-              <div id="team-b-record" class="team-record"></div>
-            </div>
-            <img id="team-b-avatar" class="team-avatar" alt="Team B Avatar" />
-          </div>
-        </div>
-
-        <div class="matchup-container">
-          <div class="team-column">
-            <h3>Starters</h3>
-            <div id="team-a-starters"></div>
-          </div>
-
-          <div class="team-column">
-            <h3>Starters</h3>
-            <div id="team-b-starters"></div>
-          </div>
-        </div>
-
-        <div class="footer">
-          <div class="update-info">
-            <div>Last updated: <span id="last-updated">—</span></div>
-            <div>Refresh in: <span id="countdown">—</span>s</div>
-          </div>
+      <div class="topbar-right">
+        <div class="meta">
+          <div class="meta-row">Last updated: <span id="last-updated">—</span></div>
+          <div class="meta-row">Refresh in: <span id="countdown">—</span>s</div>
         </div>
       </div>
+    </header>
+
+    <!-- Loading / errors -->
+    <div id="loading" class="loading">Loading matchup…</div>
+
+    <!-- Main scoreboard -->
+    <section id="scoreboard" class="scoreboard hidden">
+      <div class="scoreboard-header">
+        <div class="team-header">
+          <img id="team-a-avatar" class="team-avatar" alt="Team A avatar" />
+          <div class="team-text">
+            <div id="team-a-name" class="team-name">—</div>
+            <div id="team-a-record" class="team-record">—</div>
+          </div>
+        </div>
+
+        <div class="score-center">
+          <div class="score-display">
+            <span id="score-a">0.00</span>
+            <span class="vs">VS</span>
+            <span id="score-b">0.00</span>
+          </div>
+        </div>
+
+        <div class="team-header team-right">
+          <div class="team-text team-right-text">
+            <div id="team-b-name" class="team-name">—</div>
+            <div id="team-b-record" class="team-record">—</div>
+          </div>
+          <img id="team-b-avatar" class="team-avatar" alt="Team B avatar" />
+        </div>
+      </div>
+
+      <div class="matchup-container">
+        <div class="team-column">
+          <h3>Your Starters</h3>
+          <div id="team-a-starters" class="starters"></div>
+        </div>
+
+        <div class="team-column">
+          <h3>Opponent Starters</h3>
+          <div id="team-b-starters" class="starters"></div>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <div class="footer-muted">
+          Tap a player to open details.
+        </div>
+      </footer>
+    </section>
+  </div>
+
+  <!-- Player Modal -->
+  <div id="player-modal-backdrop" class="modal-backdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="player-modal-title">
+      <div class="modal-header">
+        <div class="modal-titles">
+          <div id="player-modal-title" class="modal-title">Player</div>
+          <div id="player-modal-subtitle" class="modal-subtitle"></div>
+        </div>
+        <button id="player-modal-close" class="modal-close" type="button">Close</button>
+      </div>
+
+      <div id="player-modal-actions" class="modal-actions"></div>
+
+      <div id="player-modal-body" class="modal-body"></div>
     </div>
+  </div>
 
-    <!-- Player Modal -->
-    <div
-      id="player-modal-backdrop"
-      class="player-modal-backdrop"
-      aria-hidden="true"
-    >
-      <div
-        class="player-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="player-modal-title"
-      >
-        <div class="player-modal-header">
-          <div class="player-modal-titlewrap">
-            <div id="player-modal-title" class="player-modal-title">Player</div>
-            <div id="player-modal-subtitle" class="player-modal-subtitle"></div>
-          </div>
-          <button id="player-modal-close" class="player-modal-close" type="button" aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        <div id="player-modal-actions" class="player-modal-actions"></div>
-        <div id="player-modal-body" class="player-modal-body"></div>
-      </div>
-    </div>
-
-    <script src="app.js"></script>
-  </body>
+  <script src="app.js"></script>
+</body>
 </html>
