@@ -19,78 +19,12 @@ let leagueContext = {
   users: null,
   rosters: null,
   userRosterId: null,
-  matchupId: null, // "my matchup" id for DISPLAY_WEEK
+  matchupId: null, // selected matchup key (string). "custom" or real matchup_id as string.
 };
 
 let scheduleByTeam = {}; // { TEAM: { opp: TEAM, homeAway: 'vs'|'@', gameStatus: string, start: string } }
 let updateTimer = null;
 let lastUpdatedTime = null;
-
-// Matchup selector state
-let matchupIndexById = {}; // { [matchup_id]: { matchupId, rosterIds:[a,b], label } }
-let selectedMatchupId = null;
-
-// Custom (non-official) matchup options (not necessarily an actual Sleeper matchup_id)
-// We build these by selecting the two roster rows from /matchups/{week} by roster_id.
-const CUSTOM_MATCHUPS = [
-  { key: "custom:conner27lax-vs-junktion", aName: "conner27lax", bName: "Junktion" },
-];
-
-function normTeamLabel(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
-function findRosterIdByTeamLike(nameLike) {
-  const needle = normTeamLabel(nameLike);
-  if (!needle) return null;
-  const rosters = leagueContext.rosters || [];
-  const users = leagueContext.users || [];
-
-  for (const r of rosters) {
-    if (!r) continue;
-    const owner = users.find((u) => u && u.user_id === r.owner_id) || null;
-    const teamName = r?.metadata?.team_name || "";
-    const display = owner?.display_name || "";
-
-    const a = normTeamLabel(teamName);
-    const b = normTeamLabel(display);
-
-    if (a && a.includes(needle)) return r.roster_id;
-    if (b && b.includes(needle)) return r.roster_id;
-    if (a && needle.includes(a) && a.length >= 4) return r.roster_id;
-    if (b && needle.includes(b) && b.length >= 4) return r.roster_id;
-  }
-  return null;
-}
-
-function buildCustomMatchupOption(matchups, opt) {
-  if (!Array.isArray(matchups)) return null;
-
-  // Resolve roster ids by team/user name
-  const aRosterId = findRosterIdByTeamLike(opt.aName);
-  const bRosterId = findRosterIdByTeamLike(opt.bName);
-  if (!aRosterId || !bRosterId) return null;
-
-  // Ensure rows exist in this week’s matchups payload
-  const rowA = matchups.find((m) => m && Number(m.roster_id) === Number(aRosterId)) || null;
-  const rowB = matchups.find((m) => m && Number(m.roster_id) === Number(bRosterId)) || null;
-  if (!rowA || !rowB) return null;
-
-  const label = `${getTeamNameByRosterId(aRosterId)} vs ${getTeamNameByRosterId(bRosterId)} (custom)`;
-  return {
-    id: opt.key,
-    type: "custom",
-    rosterIds: [Number(aRosterId), Number(bRosterId)],
-    label,
-  };
-}
-
-function isCustomSelection(val) {
-  return typeof val === "string" && val.startsWith("custom:");
-}
 
 // Raw stats cache (from nflreadpy file)
 let rawStats = {
@@ -607,75 +541,38 @@ function getUserByRoster(roster) {
   return leagueContext.users?.find((u) => u && u.user_id === roster.owner_id) || null;
 }
 
-function getDisplayNameForRosterId(rosterId) {
-  const roster = getRosterById(rosterId);
-  const user = getUserByRoster(roster);
-  return roster?.metadata?.team_name || user?.display_name || `Roster ${rosterId}`;
+function normLabel(s) {
+  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function buildMatchupLabel(rosterIdA, rosterIdB) {
-  const aName = getDisplayNameForRosterId(rosterIdA);
-  const bName = getDisplayNameForRosterId(rosterIdB);
+function findRosterIdByNameLike(nameLike) {
+  const target = normLabel(nameLike);
+  if (!target) return null;
 
-  const aRoster = getRosterById(rosterIdA);
-  const bRoster = getRosterById(rosterIdB);
+  const rosters = leagueContext.rosters || [];
+  const users = leagueContext.users || [];
 
-  const aWins = aRoster?.settings?.wins ?? 0;
-  const aLoss = aRoster?.settings?.losses ?? 0;
-  const aTies = aRoster?.settings?.ties ?? 0;
-  const bWins = bRoster?.settings?.wins ?? 0;
-  const bLoss = bRoster?.settings?.losses ?? 0;
-  const bTies = bRoster?.settings?.ties ?? 0;
-
-  const aRec = `${aWins}-${aLoss}${aTies > 0 ? "-" + aTies : ""}`;
-  const bRec = `${bWins}-${bLoss}${bTies > 0 ? "-" + bTies : ""}`;
-
-  return `${aName} (${aRec}) vs ${bName} (${bRec})`;
-}
-
-function ensureMatchupSelectorWiredOnce() {
-  const sel = document.getElementById("matchup-select");
-  if (!sel || sel.__wired) return;
-  sel.__wired = true;
-
-  sel.addEventListener("change", async (e) => {
-    const val = String(e.target.value || "");
-    selectedMatchupId = val ? Number(val) : null;
-    try {
-      await fetchAndRenderData();
-    } catch (err) {
-      console.error("Matchup change render error:", err);
-    }
-  });
-}
-
-function renderMatchupSelector() {
-  const sel = document.getElementById("matchup-select");
-  const wrap = document.getElementById("matchup-select-wrap");
-  if (!sel || !wrap) return;
-
-  const entries = Object.values(matchupIndexById || {}).sort((a, b) => a.matchupId - b.matchupId);
-  if (!entries.length) {
-    wrap.classList.add("hidden");
-    return;
+  // exact match first
+  for (const r of rosters) {
+    if (!r) continue;
+    const u = users.find((x) => x && x.user_id === r.owner_id) || null;
+    const teamName = normLabel(r?.metadata?.team_name);
+    const displayName = normLabel(u?.display_name);
+    if (teamName === target || displayName === target) return r.roster_id;
   }
 
-  wrap.classList.remove("hidden");
+  // substring match
+  for (const r of rosters) {
+    if (!r) continue;
+    const u = users.find((x) => x && x.user_id === r.owner_id) || null;
+    const teamName = normLabel(r?.metadata?.team_name);
+    const displayName = normLabel(u?.display_name);
+    if (teamName.includes(target) || displayName.includes(target)) return r.roster_id;
+  }
 
-  const desired = Number.isFinite(Number(selectedMatchupId))
-    ? Number(selectedMatchupId)
-    : Number(leagueContext.matchupId);
-
-  sel.innerHTML = entries
-    .map((m) => {
-      const selected = m.matchupId === desired ? "selected" : "";
-      return `<option value="${m.matchupId}" ${selected}>${escapeHtml(m.label)}</option>`;
-    })
-    .join("");
-
-  selectedMatchupId = desired;
-  ensureMatchupSelectorWiredOnce();
+  return null;
 }
+
 function getTeamNameByRosterId(rosterId) {
   const roster = leagueContext.rosters?.find((r) => r && r.roster_id === rosterId) || null;
   const user = roster ? leagueContext.users?.find((u) => u && u.user_id === roster.owner_id) : null;
@@ -705,67 +602,42 @@ function renderMatchupSelect(matchups, selectedId) {
   if (!wrap || !sel) return;
 
   const groups = buildMatchupGroups(matchups);
-  const officialIds = Array.from(groups.keys()).sort((a, b) => Number(a) - Number(b));
+  const ids = Array.from(groups.keys()).sort((a, b) => Number(a) - Number(b));
 
-  // Build custom options that are available for this week payload
-  const customOptions = [];
-  for (const opt of CUSTOM_MATCHUPS) {
-    const built = buildCustomMatchupOption(matchups, opt);
-    if (built) customOptions.push(built);
+  // Custom matchup: conner27lax vs Junktion (not an official Sleeper matchup_id)
+  const connerRosterId = leagueContext.userRosterId;
+  const junktionRosterId = findRosterIdByNameLike("Junktion");
+  const hasCustom = Boolean(connerRosterId && junktionRosterId);
+
+  const options = [];
+  if (hasCustom) {
+    options.push({
+      value: "custom",
+      label: `${getTeamNameByRosterId(connerRosterId)} vs ${getTeamNameByRosterId(junktionRosterId)} (custom)`,
+    });
   }
 
-  // If there is only 1 official matchup and no custom options, hide.
-  if (officialIds.length <= 1 && customOptions.length === 0) {
+  for (const id of ids) {
+    const arr = groups.get(id);
+    const a = getTeamNameByRosterId(arr[0]?.roster_id);
+    const b = getTeamNameByRosterId(arr[1]?.roster_id);
+    options.push({ value: String(id), label: `${a} vs ${b}` });
+  }
+
+  if (options.length <= 1) {
     wrap.classList.add("hidden");
     return;
   }
 
   wrap.classList.remove("hidden");
 
-  // Official options
-  const officialHtml = officialIds
-    .map((id) => {
-      const arr = groups.get(id);
-      const a = getTeamNameByRosterId(arr[0]?.roster_id);
-      const b = getTeamNameByRosterId(arr[1]?.roster_id);
-      return `<option value="${escapeHtml(String(id))}">${escapeHtml(a)} vs ${escapeHtml(b)}</option>`;
-    })
+  sel.innerHTML = options
+    .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`)
     .join("");
 
-  // Custom options (always in same dropdown)
-  const customHtml = customOptions
-    .map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.label)}</option>`)
-    .join("");
-
-  // Optional separator when both exist
-  const separator = officialIds.length && customOptions.length ? `<option value="" disabled>──────────</option>` : "";
-
-  sel.innerHTML = `${officialHtml}${separator}${customHtml}`;
-
-  // Pick selected value
-  const selectedStr = selectedId !== undefined && selectedId !== null ? String(selectedId) : "";
-
-  // Prefer an explicit selection if it exists
-  if (selectedStr && (groups.has(selectedStr) || customOptions.some((c) => c.id === selectedStr))) {
-    sel.value = selectedStr;
-    return;
-  }
-
-  // Otherwise default to user’s official matchup if possible
-  if (leagueContext.userRosterId) {
-    const userRow = Array.isArray(matchups)
-      ? matchups.find((m) => m && Number(m.roster_id) === Number(leagueContext.userRosterId))
-      : null;
-    const userMid = userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null ? String(userRow.matchup_id) : "";
-    if (userMid && groups.has(userMid)) {
-      sel.value = userMid;
-      return;
-    }
-  }
-
-  // Else pick first official, else first custom
-  if (officialIds.length) sel.value = String(officialIds[0]);
-  else if (customOptions.length) sel.value = customOptions[0].id;
+  const selectedKey = String(selectedId || "");
+  const exists = options.some((o) => o.value === selectedKey);
+  sel.value = exists ? selectedKey : options[0].value;
 }
 
 function wireMatchupSelectOnce() {
@@ -774,16 +646,7 @@ function wireMatchupSelectOnce() {
   sel.__wired = true;
 
   sel.addEventListener("change", async () => {
-    // For official matchups we store matchup_id; for custom we keep the selection string.
-    const v = String(sel.value || "");
-    if (isCustomSelection(v)) {
-      leagueContext.matchupId = null;
-      selectedMatchupId = v;
-    } else {
-      leagueContext.matchupId = v ? Number(v) : null;
-      selectedMatchupId = leagueContext.matchupId;
-    }
-
+    leagueContext.matchupId = sel.value ? String(sel.value) : null;
     try {
       await fetchAndRenderData();
     } catch (e) {
@@ -791,6 +654,7 @@ function wireMatchupSelectOnce() {
     }
   });
 }
+
 async function fetchDynamicData(week, season) {
   const matchupUrl = `${API_BASE}/league/${LEAGUE_ID}/matchups/${week}`;
 
@@ -814,73 +678,55 @@ async function fetchDynamicData(week, season) {
   const sel = document.getElementById("matchup-select");
   const selectedIdFromUI = sel && sel.value ? String(sel.value) : "";
 
-  let chosenId = "";
-
-  // 1) UI selection
-  if (selectedIdFromUI && groups.has(selectedIdFromUI)) {
-    chosenId = selectedIdFromUI;
-  } else {
-    // 2) Previously chosen
-    if (leagueContext.matchupId !== null && leagueContext.matchupId !== undefined) {
-      const prev = String(leagueContext.matchupId);
-      if (groups.has(prev)) chosenId = prev;
-    }
-
-    // 3) User roster matchup
-    if (!chosenId && leagueContext.userRosterId) {
-      const userRow = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
-      if (userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null) {
-        const id = String(userRow.matchup_id);
-        if (groups.has(id)) chosenId = id;
-      }
-    }
-
-    // 4) First matchup
-    if (!chosenId) {
-      const firstKey = groups.keys().next().value;
-      if (firstKey) chosenId = String(firstKey);
-    }
-  }
-
-  // Keep dropdown in sync and wired (include custom options)
-  renderMatchupSelect(matchups, selectedMatchupId ?? chosenId);
+  // Build/refresh dropdown (includes custom option)
+  renderMatchupSelect(matchups, selectedIdFromUI || leagueContext.matchupId);
   wireMatchupSelectOnce();
 
-  // Custom selection path
-  const sel2 = document.getElementById("matchup-select");
-  const chosenVal = sel2 && sel2.value ? String(sel2.value) : "";
+  // Determine selection key
+  let chosenKey = "";
 
-  if (isCustomSelection(chosenVal)) {
-    selectedMatchupId = chosenVal;
+  // 1) UI selection (including "custom")
+  if (selectedIdFromUI) chosenKey = selectedIdFromUI;
 
-    const customOpt = CUSTOM_MATCHUPS.find((c) => c.key === chosenVal) || null;
-    const built = customOpt ? buildCustomMatchupOption(matchups, customOpt) : null;
+  // 2) Previously chosen
+  if (!chosenKey && leagueContext.matchupId) chosenKey = String(leagueContext.matchupId);
 
-    if (built && built.rosterIds?.length === 2) {
-      const [aId, bId] = built.rosterIds;
-      const rowA = matchups.find((m) => m && Number(m.roster_id) === Number(aId)) || null;
-      const rowB = matchups.find((m) => m && Number(m.roster_id) === Number(bId)) || null;
-
-      const customTeams = rowA && rowB ? [rowA, rowB] : [];
-      // No official matchup_id for this view
-      leagueContext.matchupId = null;
-      return { matchupTeams: customTeams, projections, allMatchups: matchups };
+  // 3) Default: user's real matchup_id
+  if (!chosenKey && leagueContext.userRosterId) {
+    const userRow = matchups.find((m) => m && m.roster_id === leagueContext.userRosterId);
+    if (userRow && userRow.matchup_id !== undefined && userRow.matchup_id !== null) {
+      chosenKey = String(userRow.matchup_id);
     }
-
-    // If custom option couldn’t be built, fall back to first official
-    const firstKey = groups.keys().next().value;
-    const fallbackId = firstKey ? String(firstKey) : "";
-    leagueContext.matchupId = fallbackId ? Number(fallbackId) : null;
-    selectedMatchupId = fallbackId ? Number(fallbackId) : null;
-    const fallbackTeams = fallbackId && groups.has(fallbackId) ? groups.get(fallbackId) : [];
-    return { matchupTeams: fallbackTeams, projections, allMatchups: matchups };
   }
 
-  // Official selection path
-  selectedMatchupId = chosenId ? Number(chosenId) : null;
-  leagueContext.matchupId = chosenId ? Number(chosenId) : null;
+  // 4) Fallback: first matchup_id
+  if (!chosenKey) {
+    const firstKey = groups.keys().next().value;
+    if (firstKey) chosenKey = String(firstKey);
+  }
 
-  const currentMatchupTeams = chosenId && groups.has(chosenId) ? groups.get(chosenId) : [];
+  leagueContext.matchupId = chosenKey || null;
+
+  // Resolve matchupTeams
+  let currentMatchupTeams = [];
+
+  if (chosenKey === "custom") {
+    const connerRosterId = leagueContext.userRosterId;
+    const junktionRosterId = findRosterIdByNameLike("Junktion");
+
+    const aRow = matchups.find((m) => m && m.roster_id === connerRosterId) || null;
+    const bRow = matchups.find((m) => m && m.roster_id === junktionRosterId) || null;
+
+    if (aRow && bRow) {
+      // Use live Sleeper matchup rows (points, starters, players_points, etc.)
+      currentMatchupTeams = [aRow, bRow].sort((x, y) => (x.roster_id || 0) - (y.roster_id || 0));
+    } else {
+      currentMatchupTeams = [];
+    }
+  } else {
+    currentMatchupTeams = chosenKey && groups.has(String(chosenKey)) ? groups.get(String(chosenKey)) : [];
+  }
+
   return { matchupTeams: currentMatchupTeams, projections, allMatchups: matchups };
 }
 
@@ -889,7 +735,7 @@ async function fetchDynamicData(week, season) {
 // ------------------------------
 function mergeAndRenderData(data) {
   if (!data || !Array.isArray(data.matchupTeams) || data.matchupTeams.length < 2) {
-    console.error("Invalid matchupTeams:", data?.matchupTeams);
+    console.error("Invalid matchupTeams:", data?.matchupTeams, "matchupId=", leagueContext.matchupId);
     return;
   }
 
@@ -934,7 +780,6 @@ function mergeAndRenderData(data) {
 
   renderStarters(a.starters, "team-a-starters", a.playersPoints, projections);
   renderStarters(b.starters, "team-b-starters", b.playersPoints, projections);
-
 
   const scoreboardEl = document.getElementById("scoreboard");
   if (scoreboardEl) scoreboardEl.classList.remove("hidden");
@@ -1194,7 +1039,7 @@ async function showPlayerDetailsModal(sleeperPlayerId) {
     return;
   }
 
-  // Weighted expected row (fields needed by scoring + display)
+  // Weighted expected row
   const weights = rows.map((_, i) => i + 1);
   const wAvg = (key) => weightedAvg(rows.map((r, i) => ({ v: s(r, key), w: weights[i] })));
 
