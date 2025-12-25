@@ -4,7 +4,7 @@ const USER_USERNAME = "conner27lax";
 const UPDATE_INTERVAL_MS = 30000; // 30 seconds
 
 // Force the app to always display Week 16
-const DISPLAY_WEEK = 16;
+const DISPLAY_WEEK = 17;
 
 // --- Global Data Stores (Client-side Cache) ---
 const API_BASE = "https://api.sleeper.app/v1";
