@@ -241,9 +241,32 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
-function setImgSrc(id, src) {
-  const el = document.getElementById(id);
-  if (el && el.tagName === "IMG") el.src = src;
+function setTeamAvatar({ imgId, fallbackId, avatar, teamName }) {
+  const img = document.getElementById(imgId);
+  const fallback = document.getElementById(fallbackId);
+  const initial = String(teamName || "?").trim().charAt(0).toUpperCase() || "?";
+
+  if (fallback) {
+    fallback.textContent = initial;
+    fallback.classList.remove("hidden");
+  }
+
+  if (!img) return;
+
+  if (!avatar) {
+    img.classList.add("hidden");
+    return;
+  }
+
+  img.classList.remove("hidden");
+  img.onload = () => {
+    if (fallback) fallback.classList.add("hidden");
+  };
+  img.onerror = () => {
+    img.classList.add("hidden");
+    if (fallback) fallback.classList.remove("hidden");
+  };
+  img.src = `${AVATAR_BASE}${avatar}`;
 }
 
 function safeText(v) {
@@ -736,6 +759,7 @@ async function fetchDynamicData(week, season) {
 function mergeAndRenderData(data) {
   if (!data || !Array.isArray(data.matchupTeams) || data.matchupTeams.length < 2) {
     console.error("Invalid matchupTeams:", data?.matchupTeams, "matchupId=", leagueContext.matchupId);
+    showError("Matchup data is unavailable. Try refreshing or selecting another matchup.");
     return;
   }
 
@@ -770,12 +794,12 @@ function mergeAndRenderData(data) {
 
   setText("team-a-name", a.name);
   setText("team-a-record", a.record);
-  setImgSrc("team-a-avatar", a.avatar ? `${AVATAR_BASE}${a.avatar}` : "");
+  setTeamAvatar({ imgId: "team-a-avatar", fallbackId: "team-a-avatar-fallback", avatar: a.avatar, teamName: a.name });
   setText("score-a", a.points.toFixed(2));
 
   setText("team-b-name", b.name);
   setText("team-b-record", b.record);
-  setImgSrc("team-b-avatar", b.avatar ? `${AVATAR_BASE}${b.avatar}` : "");
+  setTeamAvatar({ imgId: "team-b-avatar", fallbackId: "team-b-avatar-fallback", avatar: b.avatar, teamName: b.name });
   setText("score-b", b.points.toFixed(2));
 
   renderStarters(a.starters, "team-a-starters", a.playersPoints, projections);
@@ -785,10 +809,13 @@ function mergeAndRenderData(data) {
   if (scoreboardEl) scoreboardEl.classList.remove("hidden");
   const loadingEl = document.getElementById("loading");
   if (loadingEl) loadingEl.classList.add("hidden");
+  const errorEl = getEl("error-message");
+  if (errorEl) errorEl.classList.add("hidden");
 
   lastUpdatedTime = new Date();
   const lastUpdatedEl = document.getElementById("last-updated");
   if (lastUpdatedEl) lastUpdatedEl.textContent = lastUpdatedTime.toLocaleTimeString();
+  setStatusPill("Live");
 }
 
 // ------------------------------
@@ -821,6 +848,11 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
 
   container.innerHTML = "";
   if (!Array.isArray(starterIds)) return;
+
+  if (starterIds.length === 0) {
+    container.innerHTML = `<div class="empty-state">No starters available for this matchup.</div>`;
+    return;
+  }
 
   starterIds.forEach((playerIdRaw) => {
     const sleeperPlayerId = String(playerIdRaw);
@@ -883,6 +915,26 @@ function renderStarters(starterIds = [], containerId, playersPoints = {}, projec
 // ------------------------------
 function getEl(id) {
   return document.getElementById(id);
+}
+
+function setStatusPill(text) {
+  const pill = getEl("status-pill");
+  if (pill) pill.textContent = text;
+}
+
+function showError(message) {
+  const errorEl = getEl("error-message");
+  const scoreboardEl = getEl("scoreboard");
+  const loadingEl = getEl("loading");
+
+  if (errorEl) {
+    errorEl.textContent = message;
+    errorEl.classList.remove("hidden");
+  }
+
+  if (scoreboardEl) scoreboardEl.classList.add("hidden");
+  if (loadingEl) loadingEl.classList.add("hidden");
+  setStatusPill("Offline");
 }
 
 function openPlayerModal() {
@@ -1157,6 +1209,9 @@ function startLiveUpdate() {
 
 async function initializeApp() {
   try {
+    const weekLabel = getEl("week-label");
+    if (weekLabel) weekLabel.textContent = `Week ${DISPLAY_WEEK} matchup overview`;
+
     await getNFLState();
     await getAllPlayers();
     await fetchInitialContext();
@@ -1167,10 +1222,7 @@ async function initializeApp() {
     await fetchAndRenderData();
     startLiveUpdate();
   } catch (error) {
-    const loadingEl = document.getElementById("loading");
-    if (loadingEl) {
-      loadingEl.textContent = `Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`;
-    }
+    showError(`Error: ${error.message}. Check LEAGUE_ID / USER_USERNAME.`);
     console.error("Initialization Failed:", error);
   }
 }

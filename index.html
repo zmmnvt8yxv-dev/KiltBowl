@@ -9,7 +9,16 @@
 
   <body>
     <div class="container">
-      <div id="loading">Loading matchup…</div>
+      <header class="page-header">
+        <div class="page-title">
+          <h1>Kilt Bowl 2026</h1>
+          <p id="week-label" class="page-subtitle">Week matchup overview</p>
+        </div>
+        <div class="status-pill" id="status-pill" aria-live="polite">Live</div>
+      </header>
+
+      <div id="loading" class="loading-state">Loading matchup…</div>
+      <div id="error-message" class="error-placeholder hidden" role="alert"></div>
 
       <div id="scoreboard" class="hidden">
         <!-- Matchup selector -->
@@ -21,7 +30,10 @@
         <!-- Header -->
         <div class="header">
           <div class="team-header">
-            <img id="team-a-avatar" class="team-avatar" alt="Team A avatar" />
+            <div class="team-avatar-wrap">
+              <img id="team-a-avatar" class="team-avatar" alt="Team A avatar" />
+              <span id="team-a-avatar-fallback" class="team-avatar-fallback" aria-hidden="true">A</span>
+            </div>
             <div class="team-info">
               <h2 id="team-a-name">Team A</h2>
               <div id="team-a-record" class="team-record">0-0</div>
@@ -37,7 +49,10 @@
               <h2 id="team-b-name">Team B</h2>
               <div id="team-b-record" class="team-record">0-0</div>
             </div>
-            <img id="team-b-avatar" class="team-avatar" alt="Team B avatar" />
+            <div class="team-avatar-wrap">
+              <img id="team-b-avatar" class="team-avatar" alt="Team B avatar" />
+              <span id="team-b-avatar-fallback" class="team-avatar-fallback" aria-hidden="true">B</span>
+            </div>
           </div>
         </div>
 
