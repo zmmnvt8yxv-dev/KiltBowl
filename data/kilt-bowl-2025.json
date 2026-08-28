@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "series_id": "kilt-bowl-2025",
+  "season": 2025,
+  "league_id": "1262418074540195841",
+  "label": "2025 Kilt Bowl",
+  "status": "final",
+  "wins_required": 2,
+  "game_weeks": [15, 16, 17],
+  "winner_rule": "weekly_official_roster_points",
+  "tie_rule": "higher_seed",
+  "participants": [
+    {
+      "seed": 7,
+      "roster_id": 8,
+      "display_name_at_event": "Junktion"
+    },
+    {
+      "seed": 8,
+      "roster_id": 4,
+      "display_name_at_event": "conner27lax"
+    }
+  ],
+  "games": [
+    {
+      "week": 15,
+      "status": "final",
+      "source_matchup_ids": [4],
+      "scores": {"4": 185.18, "8": 139.8},
+      "winner_roster_id": 4
+    },
+    {
+      "week": 16,
+      "status": "final",
+      "source_matchup_ids": [],
+      "scores": {"4": 136.34, "8": 169.58},
+      "winner_roster_id": 8
+    },
+    {
+      "week": 17,
+      "status": "final",
+      "source_matchup_ids": [],
+      "scores": {"4": 180.52, "8": 172.42},
+      "winner_roster_id": 4
+    }
+  ],
+  "series_wins": {"4": 2, "8": 1},
+  "winner_roster_id": 4,
+  "provenance": {
+    "source": "sleeper_weekly_matchups",
+    "league_snapshot": "TatnallLegacy/data/raw/sleeper/2025/final",
+    "audited_on": "2026-08-27",
+    "notes": "Weeks 16 and 17 are virtual comparisons and therefore have no official Sleeper matchup_id."
+  }
+}
