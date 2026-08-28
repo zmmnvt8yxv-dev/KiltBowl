@@ -1,158 +1,20 @@
-name: Build Raw Weekly Player Stats JSON (nflreadpy)
+name: Validate archived Kilt Bowl fixture
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 10 * * 2" # Tuesdays 10:00 UTC
+  push:
+    paths:
+      - "data/kilt-bowl-2025.json"
+      - "scripts/validate_fixture.py"
+      - ".github/workflows/build-static-stats.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-raw-stats:
+  validate-fixture:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Fetch current NFL week + season (Sleeper)
-        run: |
-          set -euxo pipefail
-          curl -s https://api.sleeper.app/v1/state/nfl > nfl_state.json
-          echo "SEASON=$(jq -r '.season' nfl_state.json)" >> $GITHUB_ENV
-          echo "WEEK=$(jq -r '.week' nfl_state.json)" >> $GITHUB_ENV
-          cat nfl_state.json
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install deps
-        run: |
-          set -euxo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install nflreadpy polars pyarrow pandas
-
-      - name: Build data/player-stats-raw.json (NO sleeper mapping)
-        run: |
-          set -euxo pipefail
-          mkdir -p data
-
-          python - <<'PY'
-          import os, json, datetime
-          import pandas as pd
-          import polars as pl
-          import nflreadpy as nfl
-
-          SEASON = int(os.environ["SEASON"])
-          WEEK = int(os.environ["WEEK"])
-          LAST_COMPLETED = max(0, WEEK - 1)
-
-          def nowz():
-            return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
-          def to_pd(df):
-            if isinstance(df, pl.DataFrame):
-              return df.to_pandas()
-            return pd.DataFrame(df)
-
-          print(f"Loading nflreadpy player stats for season={SEASON} …")
-          stats = nfl.load_player_stats([SEASON])
-          df = to_pd(stats)
-
-          print("Rows loaded:", len(df))
-          print("Columns:", list(df.columns)[:80])
-
-          required = ["player_id", "week"]
-          for c in required:
-            if c not in df.columns:
-              raise RuntimeError(f"Missing required column: {c}")
-
-          # Normalize
-          df["week"] = pd.to_numeric(df["week"], errors="coerce")
-          if "season" in df.columns:
-            df["season"] = pd.to_numeric(df["season"], errors="coerce")
-
-          if "season_type" in df.columns:
-            df["season_type"] = df["season_type"].astype(str).str.upper()
-          else:
-            df["season_type"] = "REG"
-
-          # Filter to REG + completed weeks
-          df = df[df["season_type"].str.contains("REG", na=False)].copy()
-          df = df[df["week"].between(1, LAST_COMPLETED)].copy()
-
-          data_max_week = int(pd.to_numeric(df["week"], errors="coerce").dropna().max() or 0)
-          print("After filter rows:", len(df), "data_max_week:", data_max_week, "last_completed_target:", LAST_COMPLETED)
-
-          # Build weeks: { "1": { "<player_id>": { ...all stats... } } }
-          # Use player_id from dataset (typically GSIS id). No Sleeper mapping here.
-          weeks = {}
-
-          # Convert NaN -> None for JSON
-          def clean_value(v):
-            if v is None:
-              return None
-            try:
-              if pd.isna(v):
-                return None
-            except Exception:
-              pass
-            if isinstance(v, (pd.Timestamp, datetime.datetime)):
-              return v.isoformat()
-            return v
-
-          # Determine which columns to keep:
-          # Keep everything except season_type duplication is fine; keep all stat fields.
-          keep_cols = [c for c in df.columns]
-
-          for wk, g in df.groupby(df["week"].astype(int)):
-            wk = str(int(wk))
-            weeks[wk] = {}
-            for _, r in g.iterrows():
-              pid = str(r["player_id"])
-              row_obj = {}
-              for c in keep_cols:
-                row_obj[c] = clean_value(r[c])
-              weeks[wk][pid] = row_obj
-
-          out = {
-            "season": SEASON,
-            "generated_at": nowz(),
-            "last_completed_week_target": LAST_COMPLETED,
-            "data_max_week_in_file": data_max_week,
-            "source": "nflreadpy.load_player_stats",
-            "weeks": weeks
-          }
-
-          path = "data/player-stats-raw.json"
-          with open(path, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2, ensure_ascii=False)
-
-          print("Wrote:", path, "weeks:", len(weeks))
-          if weeks:
-            w0 = sorted(weeks.keys(), key=lambda x: int(x))[0]
-            k0 = next(iter(weeks[w0].keys()))
-            print("Sample week/player:", w0, k0)
-            print("Sample keys:", list(weeks[w0][k0].keys())[:25])
-          PY
-
-          test -f data/player-stats-raw.json
-          ls -la data
-          head -n 40 data/player-stats-raw.json
-
-      - name: Commit and push (stats-bot branch)
-        run: |
-          set -euxo pipefail
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git checkout -B stats-bot
-          git add data/player-stats-raw.json
-          git commit -m "Update raw weekly player stats (week ${WEEK})" || exit 0
-          git push -u origin stats-bot --force
+      - uses: actions/checkout@v4
+      - name: Validate fixture contract and result
+        run: python3 scripts/validate_fixture.py
